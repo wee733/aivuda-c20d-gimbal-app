@@ -1,0 +1,5 @@
+@c20d_control_api path /c20d-control/api /c20d-control/api/*
+handle @c20d_control_api {
+  uri strip_prefix /c20d-control/api
+  reverse_proxy 127.0.0.1:19291
+}

@@ -1,0 +1,13 @@
+c20d_driver:
+  ros__parameters:
+    port: /dev/ttyTHS1
+    frame_id: c20d_head_up
+    update_rate: 100.0
+    feedback_timeout: 0.5
+    command_timeout: 0.5
+    auxiliary_timeout: 0.5
+    # degrees / degrees per second, pitch positive head-up
+    max_rate: 28.64788975654116
+    roll_limit: 60.0
+    pitch_limit: 120.0
+    control_enabled: true

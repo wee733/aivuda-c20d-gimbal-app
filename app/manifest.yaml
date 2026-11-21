@@ -1,0 +1,14 @@
+app_id: app_gimbal_control_c20d_20260526_512d09
+name: Gimbal Control C20D
+description: C20D serial gimbal driver with a built-in ROS 2 control panel.
+version: ros2-2.0.0
+run:
+  entrypoint: ./start.sh
+  args: []
+icon: icon.png
+pre_install: ./scripts/pre_install.sh
+ui_index_path: ui/index.html
+caddyfile_config_path: config/caddy/control-panel.caddy
+default_config_path: ./config/default_config.yaml
+config_schema_path: ./config/config_schema.yaml
+default_config: {}

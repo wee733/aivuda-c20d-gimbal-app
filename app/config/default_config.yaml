@@ -1,0 +1,9 @@
+serial:
+  port: /dev/ttyTHS1
+control:
+  enabled: true
+  teleop_enabled: true
+  command_timeout: 0.5
+  max_rate: 80.0
+  roll_limit: 60.0
+  pitch_limit: 120.0

@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Gimbal Control C20D</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="page-header">
+      <div><span class="eyebrow">C20D · ROS 2</span><h1>Gimbal Control</h1><p class="subtitle">Control the gimbal and monitor its output.</p></div>
+      <div id="connection" class="connection" role="status" aria-live="polite"><span class="status-dot"></span><span id="connection-text">Connecting</span></div>
+    </header>
+    <div class="grid">
+      <section class="card control-card" aria-labelledby="control-heading">
+        <div class="card-header"><div><span class="section-number">01 / CONTROL</span><h2 id="control-heading">Gimbal movement</h2></div><span class="chip">Hold to move</span></div>
+        <p class="hint">Press and hold a direction. Release to stop.</p>
+        <div class="pad" aria-label="Gimbal movement controls">
+          <button class="direction up" type="button" data-roll="0" data-pitch="1" aria-label="Pitch up"><span class="arrow">↑</span><span>Pitch up</span></button>
+          <button class="direction left" type="button" data-roll="-1" data-pitch="0" aria-label="Roll negative"><span class="arrow">←</span><span>Roll −</span></button>
+          <button class="stop" id="stop" type="button" aria-label="Stop movement">STOP</button>
+          <button class="direction right" type="button" data-roll="1" data-pitch="0" aria-label="Roll positive"><span class="arrow">→</span><span>Roll +</span></button>
+          <button class="direction down" type="button" data-roll="0" data-pitch="-1" aria-label="Pitch down"><span class="arrow">↓</span><span>Pitch down</span></button>
+        </div>
+        <div class="speed-row"><label for="speed">Movement speed</label><div class="speed-input"><input id="speed" type="number" min="0.1" max="80" step="0.1" value="10" inputmode="decimal"><span>°/s</span></div></div>
+        <p class="hint speed-limit-hint" id="speed-limit-hint" aria-live="polite">Waiting for the configured speed limit.</p>
+        <div class="presets" aria-label="Gimbal positions">
+          <button class="center-button" id="center" type="button"><span>◎</span> Center gimbal</button>
+          <button class="center-button" id="down-view" type="button" aria-describedby="down-view-hint"><span>↓</span> Down view</button>
+        </div>
+        <p class="hint preset-hint" id="down-view-hint">Down view targets −90° pitch and 0° roll relative to the mount.</p>
+        <p class="hint footnote">Axis direction depends on the installation. Command delivery does not confirm physical movement.</p>
+      </section>
+      <section class="card output-card" aria-labelledby="output-heading">
+        <div class="card-header"><div><span class="section-number">02 / MONITOR</span><h2 id="output-heading">Live output</h2></div><button id="clear" class="text-button" type="button">Clear view</button></div>
+        <div class="readouts">
+          <div><span>ROLL</span><strong id="roll-value">—</strong><small>deg</small></div>
+          <div><span>PITCH</span><strong id="pitch-value">—</strong><small>deg</small></div>
+          <div><span>HARDWARE ERROR</span><strong id="error-value">—</strong></div>
+        </div>
+        <div class="console-header"><span><i class="live-dot"></i> APP LOG</span><span id="log-status">Waiting for output</span></div>
+        <pre id="output" class="console" role="log" aria-live="off" aria-label="Application output">Waiting for output…</pre>
+        <p id="last-command" class="hint log-footer">No commands sent.</p>
+      </section>
+    </div>
+    <p id="notice" class="notice" role="status" aria-live="polite"></p>
+  </main>
+  <script type="module" src="./main.mjs"></script>
+</body>
+</html>

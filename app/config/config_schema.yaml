@@ -1,0 +1,50 @@
+type: object
+additionalProperties: false
+required: [serial, control]
+properties:
+  serial:
+    type: object
+    additionalProperties: false
+    required: [port]
+    properties:
+      port:
+        type: string
+        minLength: 1
+        description: C20D serial port at 115200 8N1. Restart after changing.
+        need_restart: true
+  control:
+    type: object
+    additionalProperties: false
+    required: [enabled, teleop_enabled, command_timeout, max_rate, roll_limit, pitch_limit]
+    properties:
+      enabled:
+        type: boolean
+        description: Accept movement and device commands. Feedback remains active when disabled.
+        need_restart: true
+      teleop_enabled:
+        type: boolean
+        description: Enable the Twist control relay used by the panel and Foxglove.
+        need_restart: true
+      command_timeout:
+        type: number
+        exclusiveMinimum: 0
+        description: Stop motion after this command timeout in seconds.
+        need_restart: true
+      max_rate:
+        type: number
+        exclusiveMinimum: 0
+        maximum: 80
+        description: Maximum axis speed in degrees per second, up to 80.
+        need_restart: true
+      roll_limit:
+        type: number
+        exclusiveMinimum: 0
+        maximum: 60
+        description: Roll angle limit in degrees.
+        need_restart: true
+      pitch_limit:
+        type: number
+        exclusiveMinimum: 0
+        maximum: 120
+        description: Pitch angle limit in degrees.
+        need_restart: true
