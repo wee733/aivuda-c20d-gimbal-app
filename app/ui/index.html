@@ -4,47 +4,195 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="referrer" content="no-referrer">
-  <title>Gimbal Control C20D</title>
+  <title data-i18n="title">Gimbal Control C20D</title>
   <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
   <main class="shell">
     <header class="page-header">
-      <div><span class="eyebrow">C20D · ROS 2</span><h1>Gimbal Control</h1><p class="subtitle">Control the gimbal and monitor its output.</p></div>
-      <div id="connection" class="connection" role="status" aria-live="polite"><span class="status-dot"></span><span id="connection-text">Connecting</span></div>
+      <div>
+        <span class="eyebrow">C20D · ROS 2</span>
+        <h1 data-i18n="heading">Gimbal Control</h1>
+        <p class="subtitle" data-i18n="subtitle">Control C20D operating modes, targets, device commands, and live telemetry.</p>
+      </div>
+      <div id="connection" class="connection" role="status" aria-live="polite">
+        <span class="status-dot"></span>
+        <span id="connection-text" data-i18n="connecting">Connecting</span>
+      </div>
     </header>
+
     <div class="grid">
       <section class="card control-card" aria-labelledby="control-heading">
-        <div class="card-header"><div><span class="section-number">01 / CONTROL</span><h2 id="control-heading">Gimbal movement</h2></div><span class="chip">Hold to move</span></div>
-        <p class="hint">Press and hold a direction. Release to stop.</p>
-        <div class="pad" aria-label="Gimbal movement controls">
-          <button class="direction up" type="button" data-roll="0" data-pitch="1" aria-label="Pitch up"><span class="arrow">↑</span><span>Pitch up</span></button>
-          <button class="direction left" type="button" data-roll="-1" data-pitch="0" aria-label="Roll negative"><span class="arrow">←</span><span>Roll −</span></button>
-          <button class="stop" id="stop" type="button" aria-label="Stop movement">STOP</button>
-          <button class="direction right" type="button" data-roll="1" data-pitch="0" aria-label="Roll positive"><span class="arrow">→</span><span>Roll +</span></button>
-          <button class="direction down" type="button" data-roll="0" data-pitch="-1" aria-label="Pitch down"><span class="arrow">↓</span><span>Pitch down</span></button>
+        <div class="card-header">
+          <div>
+            <span class="section-number" data-i18n="controls">01 / CONTROL</span>
+            <h2 id="control-heading" data-i18n="movement">Mode &amp; motion</h2>
+          </div>
+          <span id="mode-chip" class="chip" data-i18n="hold">HORI-RATE</span>
         </div>
-        <div class="speed-row"><label for="speed">Movement speed</label><div class="speed-input"><input id="speed" type="number" min="0.1" max="80" step="0.1" value="10" inputmode="decimal"><span>°/s</span></div></div>
-        <p class="hint speed-limit-hint" id="speed-limit-hint" aria-live="polite">Waiting for the configured speed limit.</p>
-        <div class="presets" aria-label="Gimbal positions">
-          <button class="center-button" id="center" type="button"><span>◎</span> Center gimbal</button>
-          <button class="center-button" id="down-view" type="button" aria-describedby="down-view-hint"><span>↓</span> Down view</button>
+
+        <div class="mode-tabs" role="tablist" aria-label="Gimbal control mode">
+          <button class="mode-tab active" id="tab-hori-rate" type="button" role="tab" aria-selected="true" data-mode="hori_rate" data-i18n="tabHoriRate">Horizon Rate</button>
+          <button class="mode-tab" id="tab-hori-angle" type="button" role="tab" aria-selected="false" data-mode="hori_angle" data-i18n="tabHoriAngle">Horizon Attitude</button>
+          <button class="mode-tab" id="tab-fpv-angle" type="button" role="tab" aria-selected="false" data-mode="fpv_angle" data-i18n="tabFpvAngle">FPV Relative</button>
         </div>
-        <p class="hint preset-hint" id="down-view-hint">Down view targets −90° pitch and 0° roll relative to the mount.</p>
-        <p class="hint footnote">Axis direction depends on the installation. Command delivery does not confirm physical movement.</p>
+
+        <div id="panel-hori-rate" class="mode-panel" role="tabpanel" aria-labelledby="tab-hori-rate">
+          <p class="hint" data-i18n="holdHint">LOCK angular rate mode: press and hold a direction, release to stop.</p>
+          <div class="pad" aria-label="Gimbal movement controls" data-i18n-label="padLabel">
+            <button class="direction up" type="button" data-roll="0" data-pitch="1" aria-label="Pitch up" data-i18n-label="up"><span class="arrow">↑</span><span data-i18n="up">Pitch up</span></button>
+            <button class="direction left" type="button" data-roll="-1" data-pitch="0" aria-label="Roll negative" data-i18n-label="negative"><span class="arrow">←</span><span data-i18n="rollNeg">Roll −</span></button>
+            <button class="stop" id="stop" type="button" aria-label="Stop movement" data-i18n-label="stopLabel" data-i18n="stop">STOP</button>
+            <button class="direction right" type="button" data-roll="1" data-pitch="0" aria-label="Roll positive" data-i18n-label="positive"><span class="arrow">→</span><span data-i18n="rollPos">Roll +</span></button>
+            <button class="direction down" type="button" data-roll="0" data-pitch="-1" aria-label="Pitch down" data-i18n-label="down"><span class="arrow">↓</span><span data-i18n="down">Pitch down</span></button>
+          </div>
+          <div class="speed-row">
+            <label for="speed" data-i18n="speed">Movement speed</label>
+            <div class="speed-controls">
+              <div class="speed-presets">
+                <button type="button" class="mini-chip speed-preset" data-speed="5">5</button>
+                <button type="button" class="mini-chip speed-preset" data-speed="15">15</button>
+                <button type="button" class="mini-chip speed-preset" data-speed="30">30</button>
+              </div>
+              <div class="speed-input">
+                <input id="speed" type="number" min="0.1" max="80" step="0.1" value="10" inputmode="decimal">
+                <span>°/s</span>
+              </div>
+            </div>
+          </div>
+          <p class="hint speed-limit-hint" id="speed-limit-hint" aria-live="polite" data-i18n="waitingLimit">Waiting for the configured speed limit.</p>
+          <label class="toggle-row" id="prop-rate-row">
+            <input id="use-proportional" type="checkbox">
+            <span data-i18n="propRateLabel">Proportional rate (scale by camera zoom / FOV)</span>
+          </label>
+          <p class="hint" id="prop-rate-hint" data-i18n="propRateUnavailable">Requires control.enable_auxiliary_interfaces=true and fresh camera data.</p>
+        </div>
+
+        <div id="panel-hori-angle" class="mode-panel hidden" role="tabpanel" aria-labelledby="tab-hori-angle">
+          <p class="hint" data-i18n="attitudeHint">LOCK attitude mode: stabilizes camera roll and pitch relative to the horizon.</p>
+          <div class="axis-field">
+            <div class="axis-label">
+              <label for="att-roll" data-i18n="rollTarget">Roll target</label>
+              <div class="num-unit"><input id="att-roll" type="number" min="-60" max="60" step="0.5" value="0"><span>°</span></div>
+            </div>
+            <input id="att-roll-range" type="range" min="-60" max="60" step="0.5" value="0">
+          </div>
+          <div class="axis-field">
+            <div class="axis-label">
+              <label for="att-pitch" data-i18n="pitchTarget">Pitch target</label>
+              <div class="num-unit"><input id="att-pitch" type="number" min="-120" max="120" step="0.5" value="0"><span>°</span></div>
+            </div>
+            <input id="att-pitch-range" type="range" min="-120" max="120" step="0.5" value="0">
+          </div>
+          <p class="hint angle-limit-hint" id="att-limit-hint"></p>
+          <div class="action-row">
+            <button id="send-attitude" class="primary-button" type="button" data-i18n="sendAttitude">Apply attitude</button>
+            <button id="att-level" class="secondary-button" type="button" data-i18n="presetLevel">Level (0°, 0°)</button>
+            <button id="att-down" class="secondary-button" type="button" data-i18n="presetDown90">Pitch −90°</button>
+          </div>
+        </div>
+
+        <div id="panel-fpv-angle" class="mode-panel hidden" role="tabpanel" aria-labelledby="tab-fpv-angle">
+          <p class="hint" data-i18n="fpvHint">FPV relative angle mode: camera follows the carrier with jitter smoothing relative to mechanical zero.</p>
+          <div class="axis-field">
+            <div class="axis-label">
+              <label for="fpv-roll" data-i18n="rollTarget">Roll target</label>
+              <div class="num-unit"><input id="fpv-roll" type="number" min="-60" max="60" step="0.5" value="0"><span>°</span></div>
+            </div>
+            <input id="fpv-roll-range" type="range" min="-60" max="60" step="0.5" value="0">
+          </div>
+          <div class="axis-field">
+            <div class="axis-label">
+              <label for="fpv-pitch" data-i18n="pitchTarget">Pitch target</label>
+              <div class="num-unit"><input id="fpv-pitch" type="number" min="-120" max="120" step="0.5" value="0"><span>°</span></div>
+            </div>
+            <input id="fpv-pitch-range" type="range" min="-120" max="120" step="0.5" value="0">
+          </div>
+          <div class="axis-field">
+            <div class="axis-label">
+              <label for="fpv-sens" data-i18n="fpvSensitivity">FPV sensitivity (−16..15)</label>
+              <div class="num-unit"><input id="fpv-sens" type="number" min="-16" max="15" step="1" value="0"></div>
+            </div>
+            <input id="fpv-sens-range" type="range" min="-16" max="15" step="1" value="0">
+            <p class="hint" data-i18n="fpvSensHint">Higher values follow carrier movement faster with less smoothing.</p>
+          </div>
+          <p class="hint angle-limit-hint" id="fpv-limit-hint"></p>
+          <div class="action-row">
+            <button id="send-fpv" class="primary-button" type="button" data-i18n="sendFpv">Apply relative angle</button>
+            <button id="fpv-zero" class="secondary-button" type="button" data-i18n="presetZero">Mechanical zero (0°, 0°)</button>
+          </div>
+        </div>
+
+        <div class="presets" aria-label="Gimbal positions" data-i18n-label="presetLabel">
+          <button class="center-button" id="center" type="button"><span>◎</span> <span data-i18n="center">Center gimbal</span></button>
+          <button class="center-button" id="down-view" type="button" aria-describedby="down-view-hint"><span>↓</span> <span data-i18n="downView">Down view</span></button>
+        </div>
+        <p class="hint preset-hint" id="down-view-hint" data-i18n="downHint">Down view stops rate motion, then targets −90° pitch and 0° roll relative to the mount.</p>
+
+        <div class="device-block">
+          <div class="device-title" data-i18n="deviceCommands">Device commands</div>
+          <div class="device-buttons">
+            <button id="cmd-enable" class="secondary-button" type="button" data-i18n="cmdEnable">Enable motors</button>
+            <button id="cmd-disable" class="danger-button" type="button" data-i18n="cmdDisable">Disable motors</button>
+            <button id="cmd-hold" class="secondary-button" type="button" data-i18n="cmdHold">Zero-rate hold</button>
+            <button id="cmd-calibrate" class="secondary-button" type="button" data-i18n="cmdCalibrate">Calibrate gyro</button>
+          </div>
+        </div>
+
+        <p class="hint footnote" data-i18n="axisHint">Private UART protocol exposes HORI-RATE, HORI-ANGL, and FPVM-ANGL (PLCK-ANGL is RC/MAVLink only because Roll/Pitch FOLLOW is disallowed and FPV applies to all axes).</p>
       </section>
+
       <section class="card output-card" aria-labelledby="output-heading">
-        <div class="card-header"><div><span class="section-number">02 / MONITOR</span><h2 id="output-heading">Live output</h2></div><button id="clear" class="text-button" type="button">Clear view</button></div>
-        <div class="readouts">
-          <div><span>ROLL</span><strong id="roll-value">—</strong><small>deg</small></div>
-          <div><span>PITCH</span><strong id="pitch-value">—</strong><small>deg</small></div>
-          <div><span>HARDWARE ERROR</span><strong id="error-value">—</strong></div>
+        <div class="card-header">
+          <div>
+            <span class="section-number" data-i18n="monitor">02 / MONITOR</span>
+            <h2 id="output-heading" data-i18n="output">Telemetry &amp; log</h2>
+          </div>
+          <button id="clear" class="text-button" type="button" data-i18n="clear">Clear view</button>
         </div>
-        <div class="console-header"><span><i class="live-dot"></i> APP LOG</span><span id="log-status">Waiting for output</span></div>
-        <pre id="output" class="console" role="log" aria-live="off" aria-label="Application output">Waiting for output…</pre>
-        <p id="last-command" class="hint log-footer">No commands sent.</p>
+
+        <div class="status-pills">
+          <div class="pill"><span><small data-i18n="stateLabel">State</small></span><strong id="state-badge">—</strong></div>
+          <div class="pill"><span><small data-i18n="mountLabel">Mount</small></span><strong id="mount-badge">—</strong></div>
+          <div class="pill"><span><small data-i18n="tempLabel">IMU Temp</small></span><strong id="temp-badge">—</strong></div>
+          <div class="pill"><span><small data-i18n="faultLabel">HW Error</small></span><strong id="error-value">—</strong></div>
+          <div class="pill"><span><small data-i18n="cmdReplyLabel">Cmd Reply</small></span><strong id="cmd-reply-badge">—</strong></div>
+        </div>
+
+        <div class="telemetry-groups">
+          <div class="telemetry-group">
+            <div class="group-title" data-i18n="relGroup">RELATIVE ANGLE (ENCODER)</div>
+            <div class="readouts cols-2">
+              <div><span data-i18n="roll">ROLL</span><strong id="roll-value">—</strong><small data-i18n="degree">deg</small></div>
+              <div><span data-i18n="pitch">PITCH</span><strong id="pitch-value">—</strong><small data-i18n="degree">deg</small></div>
+            </div>
+          </div>
+          <div class="telemetry-group">
+            <div class="group-title" data-i18n="attGroup">CAMERA ATTITUDE (IMU)</div>
+            <div class="readouts cols-3">
+              <div><span data-i18n="roll">ROLL</span><strong id="att-roll-value">—</strong><small data-i18n="degree">deg</small></div>
+              <div><span data-i18n="pitch">PITCH</span><strong id="att-pitch-value">—</strong><small data-i18n="degree">deg</small></div>
+              <div><span data-i18n="yaw">YAW</span><strong id="att-yaw-value">—</strong><small data-i18n="degree">deg</small></div>
+            </div>
+          </div>
+          <div class="telemetry-group">
+            <div class="group-title" data-i18n="rateGroup">CAMERA RATE (IMU)</div>
+            <div class="readouts cols-2">
+              <div><span data-i18n="roll">ROLL</span><strong id="rate-roll-value">—</strong><small data-i18n="degPerSec">°/s</small></div>
+              <div><span data-i18n="pitch">PITCH</span><strong id="rate-pitch-value">—</strong><small data-i18n="degPerSec">°/s</small></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="console-header">
+          <span><i class="live-dot"></i> <span data-i18n="log">APP LOG</span></span>
+          <span id="log-status" data-i18n="waitingLog">Waiting for output</span>
+        </div>
+        <pre id="output" class="console" role="log" aria-live="off" aria-label="Application output" data-i18n-label="outputLabel">…</pre>
+        <p id="last-command" class="hint log-footer" data-i18n="noCommands">No commands sent.</p>
       </section>
     </div>
+
     <p id="notice" class="notice" role="status" aria-live="polite"></p>
   </main>
   <script type="module" src="./main.mjs"></script>

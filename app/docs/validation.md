@@ -2,6 +2,15 @@
 
 日期：2026-10-21。环境：Ubuntu 24.04.4、aarch64、ROS 2 Jazzy。设备：先飞 C20D 卧式，UART `/dev/ttyTHS1`，115200 8N1。固件反馈原始字节 `0x24`（十进制 36），安装状态 bit 为立装，温度就绪。
 
+## 0.4.0 默认接口和零速确认（2026-11-22）
+
+在 x86_64 Ubuntu 22.04/Humble 容器、x86_64 Ubuntu 26.04/Lyrical 工作站以及机载 ARM64 Ubuntu 24.04/Jazzy 分别独立编译。三者都用伪终端运行实际 C++ 驱动。Humble 和 Jazzy 的 colcon 汇总均为 59 项，Lyrical 为 58 项，均为零错误、零失败、零跳过。计数包括 C++ gtest、ROS 伪终端集成和各发行版的 lint 项。机载测试使用独立 ROS domain 和临时目录。Jazzy 的离线 xmllint 使用本地 XML catalog 解析 ROS 官方 format 3 schema。
+
+- 仅启动默认节点时，在 ROS 图中检测到三个控制订阅、两个状态发布和 `device_command` 服务。
+- 打开辅助接口和 `joint_states` 后，复测原协议字节、限幅、超时、反馈归一化、设备指令、零速、断线重连和显式启用的 Twist 转发。
+- 在伪终端延迟设备回应，验证手动零速保持服务等待反馈。接受后发布相对俯仰 −90°，再发送先前的带戳角速度消息，确认目标保持有效。
+- ROS 面板模拟验证指令 4 被接受及被拒绝两种情况。HTTP 和控制逻辑测试覆盖超时、显式停止取消及单次预设。此次没有使用真实云台进行运动试验。
+
 ## 0.3.4：修复方向键松手误回中（2026-10-22）
 
 现场暂停转发后记录原始 `/gimbal_teleop/cmd`：方向输入 `angular.y=15/-15` 或 `angular.x=15`、`linear.z=0`；每次松手变为 `angular.x/y=0, linear.z=1`，中间按钮也产生相同消息。0.3.3 的测试假定松手 linear.z 为 0，未覆盖真实面板共享停止消息的行为，导致每次方向键松手触发回中。
@@ -40,7 +49,7 @@ Twist `linear.z > 0.5` 的按下沿发送一条双轴零角度、双轴 center �
 
 本次机器重启后 `/dev/ttyTHS1` 能打开但没有有效设备回应，驱动报告反馈超时并自动重连。因此这次确认的是 ROS/Foxglove 类型通路；恢复云台供电/串口反馈前，驱动拒绝运动输入。之前的硬件运动记录不能代替此次在线状态检查。
 
-## 0.3.0：接口拆分与俯仰方向（当前版本）
+## 0.3.0：接口拆分与俯仰方向
 
 `colcon build --packages-up-to c20d_driver --symlink-install` 成功。完整 ament/colcon 检查中发现并修复 Python import 排序问题，重跑对应 flake8 检查后，`colcon test-result --verbose` 为 **46 tests, 0 errors, 0 failures, 0 skipped**。这是当前 colcon 汇总报告计数，包含 lint 条目，不是 46 个硬件场景。
 

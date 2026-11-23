@@ -5,21 +5,22 @@ import math
 import os
 import threading
 import time
-import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
-import yaml
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
-from c20d_driver.msg import AngularRateCommand, GimbalState, RelativeAngleCommand
+from c20d_driver.msg import (AngularRateCommand, AttitudeCommand, GimbalState,
+                             ProportionalRateCommand, RelativeAngleCommand)
+from c20d_driver.srv import DeviceCommand
 
+from render_config import load_app_config
 from ui_control_logic import (MAX_RATE_DEG_S, ControlCore, allowed_origin,
-                              availability_error, bearer_token, parse_command)
+                              availability_error, bearer_token, parse_command_request)
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -47,49 +48,82 @@ def validate_token(token):
 
 
 def load_settings(path):
-    config = yaml.safe_load(Path(path).read_text(encoding='utf-8'))
-    control = config['control']
-    enabled, teleop, rate, pitch_limit = (control['enabled'], control['teleop_enabled'],
-                                           control['max_rate'], control['pitch_limit'])
-    if type(enabled) is not bool or type(teleop) is not bool:
-        raise ValueError('Control settings must be boolean')
-    if isinstance(rate, bool) or not isinstance(rate, (float, int)) or not math.isfinite(rate) or rate <= 0:
-        raise ValueError('Invalid configured maximum rate')
-    if (isinstance(pitch_limit, bool) or not isinstance(pitch_limit, (float, int))
-            or not math.isfinite(pitch_limit) or not 0 < pitch_limit <= 120):
-        raise ValueError('Invalid configured pitch limit')
-    return enabled, teleop, min(float(rate), MAX_RATE_DEG_S), float(pitch_limit)
+    """Load validated app config through the shared render_config validator."""
+    cfg = load_app_config(path)
+    cfg['max_rate'] = min(float(cfg['max_rate']), MAX_RATE_DEG_S)
+    return cfg
+
+
+def _normalize_settings(settings):
+    if isinstance(settings, dict):
+        return settings
+    enabled, teleop, max_rate, pitch_limit = settings
+    return {
+        'enabled': bool(enabled),
+        'teleop_enabled': bool(teleop),
+        'max_rate': min(float(max_rate), MAX_RATE_DEG_S),
+        'roll_limit': 60.0,
+        'pitch_limit': float(pitch_limit),
+        'command_timeout': 0.5,
+        'publish_joint_states': False,
+        'enable_auxiliary_interfaces': False,
+    }
 
 
 class ControlNode(Node):
     def __init__(self, settings):
         super().__init__('c20d_web_control')
-        self.control_enabled, self.teleop_enabled, self.max_rate_deg_s, self.pitch_limit_deg = settings
+        cfg = _normalize_settings(settings)
+        self.control_enabled = cfg['enabled']
+        self.teleop_enabled = cfg['teleop_enabled']
+        self.max_rate_deg_s = cfg['max_rate']
+        self.roll_limit_deg = cfg['roll_limit']
+        self.pitch_limit_deg = cfg['pitch_limit']
+        self.command_timeout_sec = cfg['command_timeout']
+        self.publish_joint_states = cfg['publish_joint_states']
+        self.enable_auxiliary_interfaces = cfg['enable_auxiliary_interfaces']
+
         self.rate_pub = self.create_publisher(AngularRateCommand, '/c20d_driver/command/angular_rate', 1)
         self.center_pub = self.create_publisher(RelativeAngleCommand, '/c20d_driver/command/relative_angle', 1)
+        self.attitude_pub = self.create_publisher(AttitudeCommand, '/c20d_driver/command/attitude', 1)
+        self.proportional_pub = self.create_publisher(
+            ProportionalRateCommand, '/c20d_driver/command/proportional_rate', 1)
+
         self.feedback = None
         self.feedback_received = None
         self.feedback_lock = threading.Lock()
-        self._fence_lock = threading.Lock()
-        self._fences = {}
         self.sub = self.create_subscription(GimbalState, '/c20d_driver/state', self.on_feedback,
                                             qos_profile_sensor_data)
-        # Volatile/reliable subscription is compatible with the driver's reliable,
-        # transient-local echo publisher and receives new accepted commands.
-        self.echo_sub = self.create_subscription(AngularRateCommand, '/c20d_driver/command_echo/angular_rate',
-                                                 self.on_rate_echo, 1)
-        self.core = ControlCore(self.send_rate, self.send_center, publish_down_view=self.send_down_view,
-                                begin_down_fence=self.begin_down_fence)
+        self.device = self.create_client(DeviceCommand, '/c20d_driver/device_command')
+        self.core = ControlCore(
+            self.send_rate,
+            self.send_center,
+            publish_down_view=self.send_down_view,
+            begin_down_fence=self.begin_down_fence,
+            publish_fpv_angle=self.send_fpv_angle,
+            publish_attitude=self.send_attitude,
+            publish_proportional_rate=self.send_proportional_rate,
+            send_device_command=self.send_device_command,
+        )
         self.watchdog_timer = self.create_timer(0.05, self.core.watchdog)
 
     def on_feedback(self, msg):
         # Use monotonic arrival age; the ROS clock may change or be unsynchronized.
         def safe_array(values):
             return [float(v) if math.isfinite(float(v)) else None for v in values]
-        data = {'relative_angle_rpy': safe_array(msg.relative_angle_rpy),
-                'camera_attitude_rpy': safe_array(msg.camera_attitude_rpy),
-                'hardware_error': int(msg.hardware_error), 'gimbal_state': int(msg.gimbal_state),
-                'command_code': int(msg.command_code), 'command_status': int(msg.command_status)}
+
+        data = {
+            'relative_angle_rpy': safe_array(msg.relative_angle_rpy),
+            'camera_attitude_rpy': safe_array(msg.camera_attitude_rpy),
+            'camera_rate_rpy': safe_array(msg.camera_rate_rpy),
+            'hardware_error': int(msg.hardware_error),
+            'gimbal_state': int(msg.gimbal_state),
+            'upright': bool(msg.upright),
+            'temperature_ready': bool(msg.temperature_ready),
+            'firmware_version_raw': int(msg.firmware_version_raw),
+            'command_code': int(msg.command_code),
+            'command_status': int(msg.command_status),
+        }
         with self.feedback_lock:
             self.feedback = data
             self.feedback_received = time.monotonic()
@@ -97,8 +131,14 @@ class ControlNode(Node):
     def send_rate(self, roll, pitch):
         msg = AngularRateCommand()
         msg.header.stamp = self.get_clock().now().to_msg()
-        msg.roll_deg_s, msg.pitch_deg_s = roll, pitch
+        msg.roll_deg_s, msg.pitch_deg_s = float(roll), float(pitch)
         self.rate_pub.publish(msg)
+
+    def send_proportional_rate(self, roll, pitch):
+        msg = ProportionalRateCommand()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.roll_deg_s, msg.pitch_deg_s = float(roll), float(pitch)
+        self.proportional_pub.publish(msg)
 
     def send_center(self):
         msg = RelativeAngleCommand()
@@ -107,43 +147,54 @@ class ControlNode(Node):
         msg.center_pitch = True
         self.center_pub.publish(msg)
 
-    def on_rate_echo(self, msg):
-        if msg.roll_deg_s != 0.0 or msg.pitch_deg_s != 0.0:
-            return
-        stamp = msg.header.stamp
-        key = (stamp.sec, stamp.nanosec, msg.header.frame_id)
-        with self._fence_lock:
-            event = self._fences.get(key)
-            if event is not None:
-                event.set()
+    def send_fpv_angle(self, roll, pitch, sensitivity=0):
+        msg = RelativeAngleCommand()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.roll_deg, msg.pitch_deg = float(roll), float(pitch)
+        msg.fpv_sensitivity = int(sensitivity)
+        self.center_pub.publish(msg)
+
+    def send_attitude(self, roll, pitch):
+        msg = AttitudeCommand()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.roll_deg, msg.pitch_deg = float(roll), float(pitch)
+        self.attitude_pub.publish(msg)
+
+    def _call_device_service(self, cmd, timeout_sec=1.5):
+        request = DeviceCommand.Request()
+        request.command = int(cmd)
+        future = self.device.call_async(request)
+        done = threading.Event()
+        future.add_done_callback(lambda _: done.set())
+        if not done.wait(timeout=timeout_sec):
+            self.device.remove_pending_request(future)
+            return None
+        return future.result()
 
     def begin_down_fence(self):
-        # The driver echoes this exact header only after accepting the zero-rate
-        # command. The nonce makes a stale transient echo impossible to match.
-        msg = AngularRateCommand()
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = 'c20d-panel-stop-' + uuid.uuid4().hex
-        msg.roll_deg_s = 0.0
-        msg.pitch_deg_s = 0.0
-        stamp = msg.header.stamp
-        key = (stamp.sec, stamp.nanosec, msg.header.frame_id)
-        event = threading.Event()
-        with self._fence_lock:
-            self._fences[key] = event
-        try:
-            self.rate_pub.publish(msg)
-        except Exception:
-            with self._fence_lock:
-                self._fences.pop(key, None)
-            raise
+        request = DeviceCommand.Request()
+        request.command = DeviceCommand.Request.MANUAL
+        future = self.device.call_async(request)
+        done = threading.Event()
+        future.add_done_callback(lambda _: done.set())
 
-        def wait_for_echo():
-            try:
-                return event.wait(timeout=1.0)
-            finally:
-                with self._fence_lock:
-                    self._fences.pop(key, None)
-        return wait_for_echo
+        def wait_for_hold():
+            if not done.wait(timeout=1.0):
+                self.device.remove_pending_request(future)
+                return False
+            response = future.result()
+            if not response.accepted:
+                raise ValueError(response.message)
+            return True
+        return wait_for_hold
+
+    def send_device_command(self, cmd):
+        response = self._call_device_service(cmd, timeout_sec=1.5)
+        if response is None:
+            raise TimeoutError(f'Device command {cmd} timed out')
+        if not response.accepted:
+            raise ValueError(response.message)
+        return f'Device command {cmd}: {response.message}'
 
     def send_down_view(self):
         error = availability_error('down_view', self.status())
@@ -160,14 +211,26 @@ class ControlNode(Node):
         with self.feedback_lock:
             age = None if self.feedback_received is None else max(0, time.monotonic() - self.feedback_received)
             state = dict(self.feedback) if self.feedback is not None else None
-        return {'ok': True, 'connected': age is not None and age < 0.5,
-                'feedback_age_sec': round(age, 3) if age is not None else None,
-                'state': state, 'last_command': self.core.last_command,
-                'control_enabled': self.control_enabled, 'teleop_enabled': self.teleop_enabled,
-                'max_rate_deg_s': self.max_rate_deg_s, 'pitch_limit_deg': self.pitch_limit_deg,
-                'rate_subscribers': self.rate_pub.get_subscription_count(),
-                'rate_echo_publishers': self.echo_sub.get_publisher_count(),
-                'center_subscribers': self.center_pub.get_subscription_count()}
+        return {
+            'ok': True,
+            'connected': age is not None and age < 0.5,
+            'feedback_age_sec': round(age, 3) if age is not None else None,
+            'state': state,
+            'last_command': self.core.last_command,
+            'control_enabled': self.control_enabled,
+            'teleop_enabled': self.teleop_enabled,
+            'publish_joint_states': self.publish_joint_states,
+            'enable_auxiliary_interfaces': self.enable_auxiliary_interfaces,
+            'command_timeout_sec': self.command_timeout_sec,
+            'max_rate_deg_s': self.max_rate_deg_s,
+            'roll_limit_deg': self.roll_limit_deg,
+            'pitch_limit_deg': self.pitch_limit_deg,
+            'rate_subscribers': self.rate_pub.get_subscription_count(),
+            'center_subscribers': self.center_pub.get_subscription_count(),
+            'attitude_subscribers': self.attitude_pub.get_subscription_count(),
+            'proportional_rate_subscribers': self.proportional_pub.get_subscription_count(),
+            'hold_service_ready': self.device.service_is_ready(),
+        }
 
 
 class ControlHTTPServer(ThreadingHTTPServer):
@@ -237,17 +300,18 @@ class Handler(BaseHTTPRequestHandler):
             raw_length = self.headers.get('Content-Length', '')
             if not raw_length.isascii() or not raw_length.isdigit() or not 0 < int(raw_length) <= 2048:
                 raise ValueError('Invalid request size')
-            action, roll, pitch, client_id, seq, gesture_id = parse_command(self.rfile.read(int(raw_length)))
+            action, roll, pitch, client_id, seq, gesture_id, extra = parse_command_request(
+                self.rfile.read(int(raw_length)))
         except ValueError as exc:
             self.close_connection = True
             self.respond(400, {'ok': False, 'error': str(exc)})
             return
-        error = availability_error(action, self.server.node.status(), roll, pitch)
+        error = availability_error(action, self.server.node.status(), roll, pitch, extra)
         if error:
             self.respond(409, {'ok': False, 'error': error})
             return
         try:
-            message = self.server.node.core.command(action, roll, pitch, client_id, seq, gesture_id)
+            message = self.server.node.core.command(action, roll, pitch, client_id, seq, gesture_id, extra)
         except TimeoutError as exc:
             self.respond(504, {'ok': False, 'error': str(exc)})
             return

@@ -12,11 +12,12 @@ export class HoldController {
     this.pending = null;
     this.generation = 0;
   }
-  start(roll, pitch) {
+  start(roll, pitch, action = 'move') {
+    if (action !== 'move' && action !== 'proportional_rate') return false;
     if (!Number.isFinite(roll) || !Number.isFinite(pitch) || Math.abs(roll) > PANEL_MAX_RATE || Math.abs(pitch) > PANEL_MAX_RATE || (!roll && !pitch)) return false;
     if (this.current) this.stop();
     this.generation += 1;
-    this.current = { action: 'move', gesture_id: this.newGesture(), roll_deg_s: roll, pitch_deg_s: pitch };
+    this.current = { action, gesture_id: this.newGesture(), roll_deg_s: roll, pitch_deg_s: pitch };
     this.pulse();
     this.timer = setInterval(() => this.pulse(), this.intervalMs);
     return true;
@@ -31,7 +32,7 @@ export class HoldController {
     }).catch(() => {
       if (generation === this.generation) void this.stop();
     }).finally(async () => {
-      // Complete any compensating stop before allowing a position preset.
+      // Complete any compensating stop before allowing a position preset or mode switch.
       if (generation !== this.generation) {
         await Promise.resolve().then(() => this.send({action: 'stop', gesture_id: command.gesture_id})).catch(() => {});
       }
@@ -54,8 +55,12 @@ export class HoldController {
   }
 }
 
+export async function sendCommandAfterStop(motion, send, command, isCurrent = () => true) {
+  if (!await motion.stop() || !isCurrent()) return false;
+  return send(command);
+}
+
 export async function sendPreset(motion, send, action, isCurrent = () => true) {
   if (!['center', 'down_view'].includes(action)) throw new Error('Unknown preset');
-  if (!await motion.stop() || !isCurrent()) return false;
-  return send({action});
+  return sendCommandAfterStop(motion, send, {action}, isCurrent);
 }

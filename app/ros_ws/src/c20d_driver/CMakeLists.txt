@@ -37,9 +37,11 @@ target_include_directories(c20d_protocol PUBLIC
   "$<INSTALL_INTERFACE:include/${PROJECT_NAME}>"
 )
 add_executable(c20d_node src/driver_node.cpp)
-ament_target_dependencies(c20d_node rclcpp rcl_interfaces std_msgs sensor_msgs diagnostic_msgs)
 rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} rosidl_typesupport_cpp)
-target_link_libraries(c20d_node c20d_protocol "${cpp_typesupport_target}")
+target_link_libraries(c20d_node c20d_protocol "${cpp_typesupport_target}"
+  rclcpp::rclcpp
+  sensor_msgs::sensor_msgs__rosidl_typesupport_cpp
+  diagnostic_msgs::diagnostic_msgs__rosidl_typesupport_cpp)
 add_executable(c20d_probe src/probe.cpp)
 target_link_libraries(c20d_probe c20d_protocol)
 

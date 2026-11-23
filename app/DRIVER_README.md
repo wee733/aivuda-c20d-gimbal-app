@@ -1,6 +1,6 @@
 # C20D ROS 2 串口驱动
 
-先飞（Xianfei）**C-20D 卧式两轴云台**的 C++17 驱动，面向 **Ubuntu 24.04 / ROS 2 Jazzy**，MIT 许可证。仓库名沿用 `C20C_Ros2Control`，本实现与实机验证对象是 **C20D 卧式**，不代表已验证 C20C 或立式型号。
+先飞（Xianfei）**C-20D 卧式两轴云台**的 C++17 驱动，可在 x86_64 或 ARM64 的 Linux ROS 2 环境构建（Humble、Jazzy、Lyrical），MIT 许可证。仓库名沿用 `C20C_Ros2Control`，本实现与实机验证对象是 **C20D 卧式**，不代表已验证 C20C 或立式型号。
 
 依据厂家《云台私有协议-XF(A5)V1.0.4》实现 40 字节控制帧和 26 字节反馈帧。串口、协议和核心 ROS 驱动使用 C++；Foxglove 方向键转发节点按接入需求使用 Python，另外提供 Python 无硬件集成测试。
 
@@ -21,7 +21,7 @@
 查看相对俯仰（度，正值抬头）：
 
 ```bash
-ros2 topic echo /c20d_driver/state/relative_angle --qos-reliability best_effort
+ros2 topic echo /c20d_driver/state --field relative_angle_rpy --qos-reliability best_effort
 ```
 
 ## 已实现
@@ -40,36 +40,34 @@ ros2 topic echo /c20d_driver/state/relative_angle --qos-reliability best_effort
 已安装 ROS 2 Jazzy 和 rosdep、colcon 的环境中：
 
 ```bash
-git clone https://github.com/wee733/C20C_Ros2Control.git c20d_ros2
-cd c20d_ros2
+cd app/ros_ws
 source /opt/ros/jazzy/setup.bash
 rosdep install --from-paths src --ignore-src --rosdistro jazzy -r -y
 colcon build --packages-up-to c20d_driver --symlink-install
 source install/setup.bash
 ```
 
-若串口没有读写权限，将当前用户加入该设备所属串口组（通常为 `dialout`），重新登录后生效。不要同时运行 probe 和驱动节点，也不要探测已被其他程序占用的串口。本机 `/dev/ttyTHS3` 被其他设备使用，不是本云台端口。
+若串口没有读写权限，将当前用户加入该设备所属串口组（通常为 `dialout`），重新登录后生效。不要同时运行 probe 和驱动节点，也不要探测已被其他程序占用的串口。独立驱动默认使用 `/dev/ttyUSB0`，AivudaOS 的机载配置模板使用 `/dev/ttyTHS1`。
 
 ## 启动与读取
 
 ```bash
 source /opt/ros/jazzy/setup.bash
 source install/setup.bash
-ros2 launch c20d_driver c20d.launch.xml port:=/dev/ttyTHS1
+ros2 launch c20d_driver c20d.launch.xml port:=/dev/ttyUSB0
 ```
 
 另一个终端同样 source 环境：
 
 ```bash
 ros2 topic echo /c20d_driver/state --qos-reliability best_effort
-ros2 topic echo /c20d_driver/joint_states --qos-reliability best_effort
 ros2 topic echo /c20d_driver/diagnostics
 ```
 
 也可以在节点未运行时检查指定端口：
 
 ```bash
-ros2 run c20d_driver c20d_probe /dev/ttyTHS1
+ros2 run c20d_driver c20d_probe /dev/ttyUSB0
 ```
 
 probe 使用指令码 0 轮询约 2 秒并打印有效帧和 CRC 计数。启动节点同样先使用指令码 0，不自动下发电机启用或手动模式指令。通信本身仍会发送控制协议帧，不是被动串口监听。
@@ -77,37 +75,18 @@ probe 使用指令码 0 轮询约 2 秒并打印有效帧和 CRC 计数。启动
 `control_enabled:=false` 可禁止接收运动话题和设备指令服务，保留轮询和反馈：
 
 ```bash
-ros2 launch c20d_driver c20d.launch.xml port:=/dev/ttyTHS1 control_enabled:=false
+ros2 launch c20d_driver c20d.launch.xml port:=/dev/ttyUSB0 control_enabled:=false
 ```
 
-## Foxglove Publish 面板
+## 默认接口和可选转发
 
-驱动启动就创建下列回显发布者，供 bridge 发现控制消息类型；不发送启动占位消息，不因提供类型而触发运动。无需运行额外的 `command_schema` 发布进程。
+默认有三个控制订阅 `command/relative_angle`、`command/angular_rate`、`command/attitude`，两个发布话题 `state`、`diagnostics`，以及 `device_command` 服务。0.4.0 将原有的三路分拆反馈合并到 `state`。可从其中的 `relative_angle_rpy`、`camera_attitude_rpy` 和 `camera_rate_rpy` 读取同帧反馈。
 
-| Publish 面板目标话题（控制） | 消息类型 | 回显话题（观察/提供类型） |
-| --- | --- | --- |
-| `/c20d_driver/command/relative_angle` | `c20d_driver/msg/RelativeAngleCommand` | `/c20d_driver/command_echo/relative_angle` |
-| `/c20d_driver/command/attitude` | `c20d_driver/msg/AttitudeCommand` | `/c20d_driver/command_echo/attitude` |
-| `/c20d_driver/command/angular_rate` | `c20d_driver/msg/AngularRateCommand` | `/c20d_driver/command_echo/angular_rate` |
-| `/c20d_driver/command/proportional_rate` | `c20d_driver/msg/ProportionalRateCommand` | `/c20d_driver/command_echo/proportional_rate` |
-
-例如选择相对角控制话题和 `RelativeAngleCommand`，消息填 `{"roll_deg": 0.0, "pitch_deg": -2.0}`，表示相对中位低头 2°。Publish 面板应发往 **`command/...`**，不要发往 `command_echo/...`。速度命令需持续刷新，否则按看门狗归零；角度命令发布一次即可。
-
-回显只包含通过驱动校验、已接受的原始输入，保留输入时间戳。每种回显 reliable + transient_local、深度 1，稍后连接的兼容订阅者可读取该类型最后一条输入。它不是设备执行成功确认，也不是当前生效目标：切换控制类型、速度超时或断线后，历史回显可能仍存在。执行结果看 `state` 和设备实际反馈。拒绝的输入不回显。
-
-bridge 进程必须在加载本工作区 `install/setup.bash` 的环境中启动，话题白名单需包含 `command_echo/...`，客户端发布白名单需允许 `command/...`。升级后重启驱动，Foxglove 重新连接以刷新类型。旧 `/command` 和 `GimbalCommand` 已在 0.3.0 移除，不应再配置到 Publish 面板中。
-
-## Foxglove 方向键转发
-
-`ros2 launch c20d_driver c20d.launch.xml` 默认同时启动 `gimbal_teleop_relay`。驱动已运行时，也可以单独启动一次（不要重复运行多个转发节点）：
+Foxglove 方向键转发仅在显式指定下列启动参数时运行。
 
 ```bash
-source /opt/ros/jazzy/setup.bash
-source install/setup.bash
-ros2 run c20d_driver gimbal_teleop_relay.py
+ros2 launch c20d_driver c20d.launch.xml teleop_enabled:=true
 ```
-
-启动驱动但不启用转发：`ros2 launch c20d_driver c20d.launch.xml teleop_enabled:=false`。
 
 - 输入 `/gimbal_teleop/cmd`，类型 `geometry_msgs/msg/Twist`。
 - `angular.x` 原样转为 `AngularRateCommand.roll_deg_s`；`angular.y` 原样转为 `pitch_deg_s`。
@@ -118,13 +97,11 @@ ros2 run c20d_driver gimbal_teleop_relay.py
 - 独立回中按钮发布到 `/c20d_driver/command/relative_angle`，类型 `c20d_driver/msg/RelativeAngleCommand`，内容 `{"roll_deg": 0.0, "pitch_deg": 0.0, "center_roll": true, "center_pitch": true}`，每按一次发送一次。若要让方向键中间按钮回中，前端必须让中间按键与松手产生不同事件，例如由自定义面板单独发布该角度话题，不能共用停止模板。
 - 不缓存重发速度；停止输入后驱动按 `command_timeout`（默认 0.5 s）归零。它依赖驱动运行及串口有效，不是硬件急停。
 - 输入包含非有限 angular.x/y 或 linear.z 时不转发；深度 1 避免积压旧命令。速度上限由云台驱动的 `max_rate` 校验，不在转发层另做倍率换算。
-- `/gimbal_teleop/input_echo` 在启动时提供 Twist 类型定义并回显有限数输入，供 Foxglove 获取 schema。它表示转发节点收到输入，不表示驱动或设备接受了命令；后者看 `/c20d_driver/command_echo/angular_rate`、`/c20d_driver/command_echo/relative_angle` 与实际反馈。
-
-桥接白名单需要允许客户端发布 `/gimbal_teleop/cmd`，并允许广播 `/gimbal_teleop/input_echo`。默认放行全部时无需修改。转发节点不产生周期性保活，避免在网络断流后继续刷新云台速度。
+桥接白名单需允许客户端发布 `/gimbal_teleop/cmd`。观察运动结果请订阅 `/c20d_driver/state`。
 
 ## 控制示例
 
-每条消息同时给出横滚和俯仰，未填写的轴默认目标为零；**省略轴不表示保持该轴原目标**。所有控制话题使用 reliable、volatile、深度 1，状态使用 SensorDataQoS。仅让一个上层控制器发布运动命令：四个入口共用一个执行器，最后被接受的命令整体替换前一个目标，没有跨话题优先级；节点按接收顺序处理。模式切换与双轴目标在同一回调内更新。
+每条消息同时给出横滚和俯仰，未填写的轴默认目标为零；**省略轴不表示保持该轴原目标**。所有控制话题使用 reliable、volatile、深度 1，状态使用 SensorDataQoS。仅让一个上层控制器发布运动命令：这些入口共用一个执行器，最后被接受的命令整体替换前一个目标，没有跨话题优先级；节点按接收顺序处理。模式切换与双轴目标在同一回调内更新。
 
 FPV 相对角：横滚 0°、相对安装平台抬头 2°：
 
@@ -172,7 +149,7 @@ ros2 topic pub --once /c20d_driver/command/relative_angle c20d_driver/msg/Relati
 
 角度消息中的 `center_roll` / `center_pitch` 每收到一次 true 就翻转一次厂家回中位，应使用 `--once`。它们是厂家回中请求；指定机械零位优先使用上面的相对角目标。
 
-LOCK 比例角速度有独立类型 `ProportionalRateCommand`，字段为 `roll_deg_s` / `pitch_deg_s`。该数值是倍率/FOV 换算前的基础速度，实际速度由厂家系数决定，不保证等于输入数值。持续提供真实、新鲜且非零的 `CameraData.vertical_fov_deg` / `zoom` 后，可发布：
+启用 `enable_auxiliary_interfaces:=true` 后，LOCK 比例角速度有独立类型 `ProportionalRateCommand`，字段为 `roll_deg_s` / `pitch_deg_s`。该数值是倍率/FOV 换算前的基础速度，实际速度由厂家系数决定，不保证等于输入数值。持续提供真实、新鲜且非零的 `CameraData.vertical_fov_deg` / `zoom` 后，可发布：
 
 ```bash
 ros2 topic pub -r 20 /c20d_driver/command/proportional_rate c20d_driver/msg/ProportionalRateCommand \
@@ -185,7 +162,7 @@ ros2 topic pub -r 20 /c20d_driver/command/proportional_rate c20d_driver/msg/Prop
 ros2 service call /c20d_driver/device_command c20d_driver/srv/DeviceCommand '{command: 4}'
 ```
 
-指令码：1 陀螺校准、2 启用电机、3 关闭电机、4 手动零速度保持、5 点动、6 目标跟踪。**3 会关闭电机，不是速度停止**。`accepted` 仅表示驱动接受排队，执行情况看 `state.command_code` 和 `state.command_status`（0 执行中、1 成功、2 失败）。校准需静置且温度就绪。点动/跟踪必须持续提供新鲜 `CameraData`，不是驱动自带视觉算法。发布上述任意运动命令会切回手动控制。
+指令码：1 陀螺校准、2 启用电机、3 关闭电机、4 手动零速度保持、5 点动、6 目标跟踪。**3 会关闭电机，不是速度停止**。指令 4 等待零速保持帧收到设备回应才返回 `accepted=true`，其余指令的 `accepted` 表示接受排队，执行情况看 `state.command_code` 和 `state.command_status`（0 执行中、1 成功、2 失败）。校准需静置且温度就绪。点动/跟踪必须持续提供新鲜 `CameraData`，不是驱动自带视觉算法。发布上述任意运动命令会切回手动控制。
 
 ## 数据、方向和限制
 
@@ -196,18 +173,15 @@ ros2 service call /c20d_driver/device_command c20d_driver/srv/DeviceCommand '{co
 | `command/relative_angle` | `RelativeAngleCommand` | 双轴 FPV 相对角目标，度 |
 | `command/attitude` | `AttitudeCommand` | 双轴 LOCK 稳定姿态目标，度 |
 | `command/angular_rate` | `AngularRateCommand` | 双轴 LOCK 真实角速度，度/秒 |
-| `command/proportional_rate` | `ProportionalRateCommand` | 双轴 LOCK 比例速度基础值，度/秒 |
-| `state/relative_angle` | `AngleState` | 编码器解算相对角：`roll_deg/pitch_deg/yaw_deg` |
-| `state/attitude` | `AngleState` | 相机稳定姿态：`roll_deg/pitch_deg/yaw_deg` |
-| `state/angular_rate` | `AngularRateState` | 相机 IMU 本体角速度：`roll_deg_s/pitch_deg_s/yaw_deg_s` |
+| `command/proportional_rate` | `ProportionalRateCommand` | 可选，双轴 LOCK 比例速度基础值，度/秒 |
 | `state` | `GimbalState` | 同一串口帧的完整状态：归一方向后的数组及原始字段 |
-| `joint_states` | `sensor_msgs/msg/JointState` | 相对横滚/俯仰，弧度；俯仰抬头正，不发布伪造的关节速度 |
+| `joint_states` | `sensor_msgs/msg/JointState` | 可选，相对横滚/俯仰，弧度；俯仰抬头正，不发布伪造的关节速度 |
 | `diagnostics` | `diagnostic_msgs/msg/DiagnosticArray` | 在线、帧数、CRC、拒绝指令计数 |
-| `carrier` | `CarrierData` | 外部载机姿态及 NEU 加速度，仍遵循厂家载机坐标 |
-| `camera` | `CameraData` | FOV、倍率、图像目标偏角，垂直偏角仍为向下正 |
-| `device_command` | `c20d_driver/srv/DeviceCommand` | 设备指令服务及是否入队 |
+| `carrier` | `CarrierData` | 可选，外部载机姿态及 NEU 加速度，仍遵循厂家载机坐标 |
+| `camera` | `CameraData` | 可选，FOV、倍率、图像目标偏角，垂直偏角仍为向下正 |
+| `device_command` | `c20d_driver/srv/DeviceCommand` | 设备指令服务，指令 4 等待设备回应 |
 
-三种拆分反馈与完整 `state` 从同一有效帧产生，使用相同接收时间戳。相对角来自编码器，姿态角来自厂家姿态估计；两者的零位和参考不同，不能因正方向一致就当作相同角度。相机 IMU 本体角速度不是机械关节速度，也不是一般多轴运动下的欧拉角导数。
+`state` 提供同一有效串口帧的所有反馈和接收时间。相对角来自编码器，姿态角来自厂家姿态估计；两者的零位和参考不同，不能因正方向一致就当作相同角度。相机 IMU 本体角速度不是机械关节速度，也不是一般多轴运动下的欧拉角导数。
 
 **俯仰映射（已验证的立装 C20D、固件原始值 36）：**
 
@@ -235,6 +209,9 @@ ros2 service call /c20d_driver/device_command c20d_driver/srv/DeviceCommand '{co
 | `roll_limit` | 60° | 横滚目标绝对值不超过 60° |
 | `pitch_limit` | 120° | 俯仰目标绝对值不超过 120° |
 | `control_enabled` | true | 接受运动话题/设备指令 |
+| `port` | /dev/ttyUSB0 | 也可指定 /dev/serial/by-id/... |
+| `publish_joint_states` | false | 发布弧度制关节状态 |
+| `enable_auxiliary_interfaces` | false | 开启比例速度、载机、相机订阅 |
 
 非有限数、超限、无效 FPV 灵敏度和过期/未来时间戳会被拒绝。拆分接口不允许混合 FPV 或 FPV 速度模式。横滚/俯仰 FOLLOW 模式按手册禁止。角度软件限制检查的是目标值，不是机械极限保护；接近限位时不要持续发速度指令。断线后的硬件行为取决于云台固件，驱动无法通过已经断开的线发送停止；退出时仅尽力发送零速度保持。
 
@@ -249,4 +226,4 @@ colcon test-result --verbose
 
 测试使用伪终端，不自动操作真实云台。报文字段、官方资料版本、参考仓库和文档勘误见 [协议说明](docs/protocol.md)；实机范围见 [验证记录](docs/validation.md)。
 
-[MIT](LICENSE)。厂商手册及参考项目的权利归各自权利人，本仓库不重新分发厂商 PDF。
+[MIT](DRIVER_LICENSE)。厂商手册及参考项目的权利归各自权利人，本仓库不重新分发厂商 PDF。

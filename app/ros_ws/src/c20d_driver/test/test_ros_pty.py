@@ -30,9 +30,7 @@ import subprocess
 import sys
 import time
 
-from c20d_driver.msg import AngleState
 from c20d_driver.msg import AngularRateCommand
-from c20d_driver.msg import AngularRateState
 from c20d_driver.msg import AttitudeCommand
 from c20d_driver.msg import CameraData
 from c20d_driver.msg import CarrierData
@@ -42,10 +40,40 @@ from c20d_driver.msg import RelativeAngleCommand
 from c20d_driver.srv import DeviceCommand
 from geometry_msgs.msg import Twist
 import rclpy
-from rclpy.qos import DurabilityPolicy
 from rclpy.qos import qos_profile_sensor_data
-from rclpy.qos import QoSProfile
 from sensor_msgs.msg import JointState
+
+
+def test_default_graph():
+    """Discover the driver alone before creating any test publishers or subscriptions."""
+    domain = 100 + os.getpid() % 100
+    rclpy.init(domain_id=domain)
+    node = rclpy.create_node('c20d_graph_test')
+    master, slave = pty.openpty()
+    process = subprocess.Popen([
+        os.environ['C20D_TEST_EXECUTABLE'], '--ros-args', '-p',
+        'port:=' + os.ttyname(slave)], env=dict(os.environ, ROS_DOMAIN_ID=str(domain)))
+    client = node.create_client(DeviceCommand, '/c20d_driver/device_command')
+    try:
+        assert client.wait_for_service(timeout_sec=8)
+        expected = {'/c20d_driver/' + name for name in (
+            'state', 'diagnostics', 'command/angular_rate', 'command/relative_angle',
+            'command/attitude')}
+        end = time.monotonic() + 5
+        while True:
+            topics = {name for name, _ in node.get_topic_names_and_types()
+                      if name.startswith(('/c20d_driver/', '/gimbal_teleop/'))}
+            if topics == expected or time.monotonic() >= end:
+                break
+            rclpy.spin_once(node, timeout_sec=0.05)
+        assert topics == expected
+    finally:
+        process.send_signal(signal.SIGINT)
+        process.wait(timeout=5)
+        node.destroy_node()
+        rclpy.shutdown()
+        os.close(slave)
+        os.close(master)
 
 
 def test_ros_serial_roundtrip():
@@ -61,15 +89,6 @@ def test_ros_serial_roundtrip():
         JointState, '/c20d_driver/joint_states', joints.append, qos_profile_sensor_data)
     subscription = node.create_subscription(
         GimbalState, '/c20d_driver/state', states.append, qos_profile_sensor_data)
-    relative_states, attitude_states, rate_states = [], [], []
-    node.create_subscription(
-        AngleState, '/c20d_driver/state/relative_angle', relative_states.append,
-        qos_profile_sensor_data)
-    node.create_subscription(
-        AngleState, '/c20d_driver/state/attitude', attitude_states.append, qos_profile_sensor_data)
-    node.create_subscription(
-        AngularRateState, '/c20d_driver/state/angular_rate', rate_states.append,
-        qos_profile_sensor_data)
     publisher = node.create_publisher(AttitudeCommand, '/c20d_driver/command/attitude', 1)
     relative = node.create_publisher(
         RelativeAngleCommand, '/c20d_driver/command/relative_angle', 1)
@@ -80,21 +99,14 @@ def test_ros_serial_roundtrip():
     camera = node.create_publisher(CameraData, '/c20d_driver/camera', 1)
     teleop = node.create_publisher(Twist, '/gimbal_teleop/cmd', 1)
     client = node.create_client(DeviceCommand, '/c20d_driver/device_command')
-    echo_types = {
-        'relative_angle': RelativeAngleCommand,
-        'attitude': AttitudeCommand,
-        'angular_rate': AngularRateCommand,
-        'proportional_rate': ProportionalRateCommand,
-    }
-    echoes = {key: [] for key in echo_types}
-    echo_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
-    for key, message_type in echo_types.items():
-        node.create_subscription(
-            message_type, '/c20d_driver/command_echo/' + key, echoes[key].append, echo_qos)
+    rates = []
+    node.create_subscription(
+        AngularRateCommand, '/c20d_driver/command/angular_rate', rates.append, 1)
     environment = dict(os.environ, ROS_DOMAIN_ID=str(domain))
     process = subprocess.Popen([
         os.environ['C20D_TEST_EXECUTABLE'], '--ros-args', '-p',
         'port:=' + os.ttyname(slave), '-p', 'command_timeout:=0.2',
+        '-p', 'publish_joint_states:=true', '-p', 'enable_auxiliary_interfaces:=true',
         '-p', 'auxiliary_timeout:=0.2', '-p', 'feedback_timeout:=0.3'], env=environment)
     relay = subprocess.Popen([sys.executable, os.environ['C20D_TEST_RELAY']], env=environment)
     wire = bytearray()
@@ -156,20 +168,11 @@ def test_ros_serial_roundtrip():
         assert state.header.frame_id == 'c20d_head_up'
         assert list(state.relative_angle_raw_pyr) == [-13998, 95, -2]
         assert list(state.camera_attitude_raw_rpy) == [9, 13708, 441]
-        assert math.isclose(relative_states[-1].pitch_deg, 139.98)
-        assert math.isclose(attitude_states[-1].pitch_deg, 137.08)
-        assert math.isclose(rate_states[-1].pitch_deg_s, 0.1)
-        assert relative_states[-1].header == attitude_states[-1].header
-        assert relative_states[-1].header == rate_states[-1].header
         assert all(packet[2] >> 3 == 0 for packet in sent), 'Startup must only poll'
         assert relative.get_subscription_count() == 1
-        assert rate.get_subscription_count() == 1
+        assert rate.get_subscription_count() == 2  # Driver and relay observer in this test.
         assert proportional.get_subscription_count() == 1
         assert node.count_subscribers('/c20d_driver/command') == 0
-        for key, message_type in echo_types.items():
-            info = node.get_publishers_info_by_topic('/c20d_driver/command_echo/' + key)
-            assert len(info) == 1 and info[0].topic_type.endswith('/' + message_type.__name__)
-            assert not echoes[key], 'Schema advertisement must not emit a startup command'
         simulate_motion = True
 
         command = AttitudeCommand()
@@ -184,14 +187,7 @@ def test_ros_serial_roundtrip():
         assert sent[-1][7] == 0x10
         assert struct.unpack_from('<h', sent[-1], 5)[0] == 200
         assert struct.unpack_from('<h', sent[-1], 8)[0] == -300
-        assert math.isclose(attitude_states[-1].pitch_deg, -3.0)
-        assert len(echoes['attitude']) == 1 and echoes['attitude'][-1] == command
-        late_echoes = []
-        late_sub = node.create_subscription(
-            AttitudeCommand, '/c20d_driver/command_echo/attitude', late_echoes.append, echo_qos)
-        pump(0.2)
-        assert late_echoes and late_echoes[-1] == command
-        node.destroy_subscription(late_sub)
+        assert math.isclose(states[-1].camera_attitude_rpy[1], -3.0)
         previous = sent[-1][4:13]
 
         command.roll_deg = float('nan')
@@ -215,7 +211,6 @@ def test_ros_serial_roundtrip():
         pump(0.05)
         assert sent[-1][4:13] == previous
 
-        assert len(echoes['attitude']) == 1, 'Rejected commands must not be echoed'
         for target in (2.0, -2.0):
             command = RelativeAngleCommand()
             command.roll_deg = 1.0
@@ -223,14 +218,12 @@ def test_ros_serial_roundtrip():
             command.fpv_sensitivity = -3
             relative.publish(command)
             pump(0.1)
-            assert echoes['relative_angle'] and echoes['relative_angle'][-1] == command
             assert sent[-1][4] == 0x28
             assert sent[-1][7] == 0x20
             assert sent[-1][10] == 0x20, 'FPV applies to all protocol axes'
             assert sent[-1][3] >> 3 == 29  # Signed five-bit -3.
             assert struct.unpack_from('<h', sent[-1], 5)[0] == 100
             assert struct.unpack_from('<h', sent[-1], 8)[0] == round(target * 100)
-            assert math.isclose(relative_states[-1].pitch_deg, target)
             assert math.isclose(states[-1].relative_angle_rpy[1], target)
             assert math.isclose(joints[-1].position[1], math.radians(target))
             assert states[-1].relative_angle_raw_pyr[0] == round(-target * 100)
@@ -249,7 +242,6 @@ def test_ros_serial_roundtrip():
             pump(0.1)
             assert sent[-1][7] == 0x10
             assert struct.unpack_from('<h', sent[-1], 8)[0] == round(target * 100)
-            assert math.isclose(attitude_states[-1].pitch_deg, target)
             assert math.isclose(states[-1].camera_attitude_rpy[1], target)
 
         for target in (5.0, -5.0):
@@ -257,10 +249,8 @@ def test_ros_serial_roundtrip():
             command.pitch_deg_s = target
             rate.publish(command)
             pump(0.1)
-            assert echoes['angular_rate'] and echoes['angular_rate'][-1] == command
             assert sent[-1][7] == 0x90
             assert struct.unpack_from('<h', sent[-1], 8)[0] == round(target * 10)
-            assert math.isclose(rate_states[-1].pitch_deg_s, target)
             assert math.isclose(states[-1].camera_rate_rpy[1], target)
             assert states[-1].camera_rate_raw_pyr[0] == round(-target * 10)
             # Invalid speed must not refresh the watchdog.
@@ -280,6 +270,28 @@ def test_ros_serial_roundtrip():
         pump(0.3)
         assert sent[-1][7] == 0x20
         assert struct.unpack_from('<h', sent[-1], 8)[0] == -300
+
+        # MANUAL must not acknowledge until the zero-rate frame has crossed the UART.
+        # A queued rate message older than the hold must never override the down target.
+        delayed = AngularRateCommand()
+        delayed.header.stamp = node.get_clock().now().to_msg()
+        delayed.pitch_deg_s = 5.0
+        respond = False
+        request = DeviceCommand.Request()
+        request.command = DeviceCommand.Request.MANUAL
+        hold = client.call_async(request)
+        pump(0.05)
+        assert not hold.done() and sent[-1][2] >> 3 == 4
+        assert sent[-1][7] >> 6 == 2 and struct.unpack_from('<h', sent[-1], 8)[0] == 0
+        respond = True
+        pump(0.05)
+        assert hold.done() and hold.result().accepted
+        angle.pitch_deg = -90.0
+        relative.publish(angle)
+        pump(0.03)
+        rate.publish(delayed)
+        pump(0.04)
+        assert sent[-1][7] >> 6 == 0 and struct.unpack_from('<h', sent[-1], 8)[0] == -9000
 
         # Proportional rate is a distinct input and requires camera metadata.
         scaled_rate = ProportionalRateCommand()
@@ -313,7 +325,6 @@ def test_ros_serial_roundtrip():
             scaled_rate.pitch_deg_s = target
             proportional.publish(scaled_rate)
             pump(0.05)
-            assert echoes['proportional_rate'] and echoes['proportional_rate'][-1] == scaled_rate
             assert sent[-1][7] == 0x50
             assert struct.unpack_from('<h', sent[-1], 8)[0] == round(target * 10)
         # Refresh command but let camera expire: scaled speed must stop anyway.
@@ -337,7 +348,7 @@ def test_ros_serial_roundtrip():
 
         # Actual relay -> ROS driver -> UART, without any real hardware.
         assert teleop.get_subscription_count() == 1
-        assert node.count_publishers('/gimbal_teleop/input_echo') == 1
+        assert node.count_publishers('/gimbal_teleop/input_echo') == 0
         twist = Twist()
         twist.angular.x = -10.0
         twist.angular.y = 10.0
@@ -345,27 +356,26 @@ def test_ros_serial_roundtrip():
         pump(0.15)
         assert struct.unpack_from('<h', sent[-1], 5)[0] == -100
         assert struct.unpack_from('<h', sent[-1], 8)[0] == 100
-        assert echoes['angular_rate'][-1].roll_deg_s == -10.0
-        assert echoes['angular_rate'][-1].pitch_deg_s == 10.0
-        assert echoes['angular_rate'][-1].header.stamp.sec > 0
-        last_echo_count = len(echoes['angular_rate'])
+        assert rates[-1].roll_deg_s == -10.0
+        assert rates[-1].pitch_deg_s == 10.0
+        assert rates[-1].header.stamp.sec > 0
+        last_rate_count = len(rates)
         twist.angular.y = float('nan')
         teleop.publish(twist)
         pump(0.1)
-        assert len(echoes['angular_rate']) == last_echo_count
+        assert len(rates) == last_rate_count
         pump(0.3)
         assert struct.unpack_from('<h', sent[-1], 5)[0] == 0
         assert struct.unpack_from('<h', sent[-1], 8)[0] == 0
-        assert len(echoes['angular_rate']) == last_echo_count, 'Relay must not repeat stale input'
+        assert len(rates) == last_rate_count, 'Relay must not repeat stale input'
         teleop.publish(Twist())
         pump(0.1)
-        assert len(echoes['angular_rate']) == last_echo_count + 1
-        assert echoes['angular_rate'][-1].roll_deg_s == 0.0
-        assert echoes['angular_rate'][-1].pitch_deg_s == 0.0
+        assert len(rates) == last_rate_count + 1
+        assert rates[-1].roll_deg_s == 0.0
+        assert rates[-1].pitch_deg_s == 0.0
 
         # Replay actual pad traffic: release and middle press both have linear.z=1.
         # Neither may center the gimbal or toggle the protocol's center bits.
-        relative_count = len(echoes['relative_angle'])
         before_release = sent[-1]
         release = Twist()
         release.linear.z = 1.0
@@ -378,25 +388,23 @@ def test_ros_serial_roundtrip():
             assert struct.unpack_from('<h', sent[-1], offset)[0] == int(speed * 10)
             teleop.publish(release)
             pump(0.1)
-            assert echoes['angular_rate'][-1].roll_deg_s == 0.0
-            assert echoes['angular_rate'][-1].pitch_deg_s == 0.0
+            assert rates[-1].roll_deg_s == 0.0
+            assert rates[-1].pitch_deg_s == 0.0
             assert struct.unpack_from('<h', sent[-1], 5)[0] == 0
             assert struct.unpack_from('<h', sent[-1], 8)[0] == 0
-            assert len(echoes['relative_angle']) == relative_count
             assert (sent[-1][4] ^ before_release[4]) & 8 == 0
             assert (sent[-1][7] ^ before_release[7]) & 8 == 0
         # Holding the middle/stop button also remains a zero velocity request.
         for _ in range(8):
             teleop.publish(release)
             pump(0.05)
-        assert len(echoes['relative_angle']) == relative_count
-        assert echoes['angular_rate'][-1].pitch_deg_s == 0.0
+        assert rates[-1].pitch_deg_s == 0.0
         invalid = Twist()
         invalid.linear.z = float('nan')
-        rate_count = len(echoes['angular_rate'])
+        rate_count = len(rates)
         teleop.publish(invalid)
         pump(0.1)
-        assert len(echoes['angular_rate']) == rate_count
+        assert len(rates) == rate_count
 
         respond = False
         pump(0.45)

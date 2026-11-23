@@ -13,12 +13,14 @@ from ui_control_logic import ControlCore
 
 # Import the HTTP server without a ROS runtime; only its HTTP handlers are used.
 mods = {}
-for name in ('rclpy', 'rclpy.node', 'rclpy.qos', 'c20d_driver', 'c20d_driver.msg'):
+for name in ('rclpy', 'rclpy.node', 'rclpy.qos', 'c20d_driver', 'c20d_driver.msg', 'c20d_driver.srv'):
     mods[name] = sys.modules.get(name)
     sys.modules[name] = types.ModuleType(name)
+sys.modules['c20d_driver.srv'].DeviceCommand = object
 sys.modules['rclpy.node'].Node = object
 sys.modules['rclpy.qos'].qos_profile_sensor_data = object()
-for name in ('AngularRateCommand', 'GimbalState', 'RelativeAngleCommand'):
+for name in ('AngularRateCommand', 'AttitudeCommand', 'GimbalState',
+             'ProportionalRateCommand', 'RelativeAngleCommand'):
     setattr(sys.modules['c20d_driver.msg'], name, object)
 spec = importlib.util.spec_from_file_location('c20d_ui_server_test', SCRIPTS / 'ui_control_server.py')
 server_mod = importlib.util.module_from_spec(spec)
@@ -34,15 +36,23 @@ class FakeNode:
     def __init__(self):
         self.events = []
         self.pitch_limit = 120
-        self.confirm_echo = True
+        self.roll_limit = 60
+        self.confirm_hold = True
         self.core = ControlCore(lambda r,p: self.events.append(('rate',r,p)),
                                 lambda: self.events.append(('center',)),
                                 publish_down_view=lambda: self.events.append(('down',)),
-                                begin_down_fence=lambda: (self.events.append(('rate',0.0,0.0)) or (lambda: self.confirm_echo)))
+                                begin_down_fence=lambda: (self.events.append(('rate',0.0,0.0)) or (lambda: self.confirm_hold)),
+                                publish_fpv_angle=lambda r,p,s: self.events.append(('fpv',r,p,s)),
+                                publish_attitude=lambda r,p: self.events.append(('att',r,p)),
+                                publish_proportional_rate=lambda r,p: self.events.append(('prop',r,p)),
+                                send_device_command=lambda cmd: self.events.append(('dev',cmd)) or f'Device command {cmd}: OK')
     def status(self):
-        return dict(ok=True, control_enabled=True, teleop_enabled=True, connected=True, state={'hardware_error':0, 'gimbal_state':0},
-                    rate_subscribers=1, center_subscribers=1, max_rate_deg_s=80,
-                    pitch_limit_deg=self.pitch_limit, rate_echo_publishers=1)
+        return dict(ok=True, control_enabled=True, teleop_enabled=True,
+                    enable_auxiliary_interfaces=True, publish_joint_states=False,
+                    connected=True, state={'hardware_error':0, 'gimbal_state':4, 'temperature_ready':True},
+                    rate_subscribers=1, center_subscribers=1, attitude_subscribers=1,
+                    proportional_rate_subscribers=1, max_rate_deg_s=80,
+                    roll_limit_deg=self.roll_limit, pitch_limit_deg=self.pitch_limit, hold_service_ready=True)
 
 
 class HTTPTests(unittest.TestCase):
@@ -142,11 +152,11 @@ class HTTPTests(unittest.TestCase):
         self.assertFalse(published[0].center_roll)
         self.assertFalse(published[0].center_pitch)
 
-    def test_down_view_reports_missing_stop_echo_without_publishing_angle(self):
+    def test_down_view_reports_missing_hold_response_without_publishing_angle(self):
         c='00000000-0000-4000-8000-000000000004'
         down={'action':'down_view','client_id':c,'seq':1}
         headers={'Authorization':'Bearer valid','Content-Type':'application/json'}
-        self.node.confirm_echo = False
+        self.node.confirm_hold = False
         before = self.node.events.count(('down',))
         try:
             status,data,_ = self.request('POST','/command',json.dumps(down),headers)
@@ -154,36 +164,22 @@ class HTTPTests(unittest.TestCase):
             self.assertIn('not sent',data['error'])
             self.assertEqual(self.node.events.count(('down',)),before)
         finally:
-            self.node.confirm_echo = True
+            self.node.confirm_hold = True
 
-    def test_zero_rate_fence_only_accepts_its_matching_echo(self):
-        class Clock:
-            def now(self): return self
-            def to_msg(self): return types.SimpleNamespace(sec=123, nanosec=456)
-        class Msg:
-            def __init__(self):
-                self.header=types.SimpleNamespace(stamp=None,frame_id='')
-                self.roll_deg_s=0.; self.pitch_deg_s=0.
-        sent=[]
-        node=types.SimpleNamespace(get_clock=lambda:Clock(),_fence_lock=threading.Lock(),
-                                   _fences={},rate_pub=types.SimpleNamespace(publish=sent.append))
-        prior=server_mod.AngularRateCommand
-        server_mod.AngularRateCommand=Msg
-        try:
-            waiter=server_mod.ControlNode.begin_down_fence(node)
-        finally:
-            server_mod.AngularRateCommand=prior
-        message=sent[0]
-        wrong=Msg(); wrong.header.stamp=message.header.stamp; wrong.header.frame_id='other'
-        server_mod.ControlNode.on_rate_echo(node,wrong)
-        self.assertFalse(next(iter(node._fences.values())).is_set())
-        message.pitch_deg_s=1
-        server_mod.ControlNode.on_rate_echo(node,message)
-        self.assertFalse(next(iter(node._fences.values())).is_set())
-        message.pitch_deg_s=0
-        server_mod.ControlNode.on_rate_echo(node,message)
-        self.assertTrue(waiter())
-        self.assertEqual(node._fences,{})
+    def test_fpv_attitude_and_device_command_routes(self):
+        c = '00000000-0000-4000-8000-000000000005'
+        headers = {'Authorization': 'Bearer valid', 'Content-Type': 'application/json'}
+        fpv = {'action': 'fpv_angle', 'client_id': c, 'seq': 1, 'roll_deg': 10, 'pitch_deg': -20, 'fpv_sensitivity': 3}
+        self.assertEqual(self.request('POST', '/command', json.dumps(fpv), headers)[0], 200)
+        self.assertEqual(self.node.events[-1], ('fpv', 10.0, -20.0, 3))
+        att = {'action': 'attitude', 'client_id': c, 'seq': 2, 'roll_deg': 0, 'pitch_deg': 15}
+        self.assertEqual(self.request('POST', '/command', json.dumps(att), headers)[0], 200)
+        self.assertEqual(self.node.events[-1], ('att', 0.0, 15.0))
+        dev = {'action': 'device_command', 'client_id': c, 'seq': 3, 'command': 1}
+        self.assertEqual(self.request('POST', '/command', json.dumps(dev), headers)[0], 200)
+        self.assertEqual(self.node.events[-1], ('dev', 1))
+        bad_roll = {'action': 'attitude', 'client_id': c, 'seq': 4, 'roll_deg': 61, 'pitch_deg': 0}
+        self.assertEqual(self.request('POST', '/command', json.dumps(bad_roll), headers)[0], 400)
 
 
 if __name__ == '__main__': unittest.main()

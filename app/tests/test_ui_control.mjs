@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { HoldController, sendPreset } from '../ui/control.mjs';
+import { HoldController, sendCommandAfterStop, sendPreset } from '../ui/control.mjs';
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 test('hold starts a bounded command and release sends stop', async () => {
@@ -96,4 +96,13 @@ test('a rejected motion clears the hold and requests stop', async () => {
   assert.equal(commands[0], 'move');
   assert.ok(commands.slice(1).every(command => command === 'stop'));
   assert.ok(commands.length >= 2);
+});
+test('proportional_rate hold and sendCommandAfterStop work cleanly', async () => {
+  const commands = [];
+  const control = new HoldController(async command => { commands.push(command); return true; }, 1000, () => 'gesture-prop');
+  assert.equal(control.start(5, -5, 'proportional_rate'), true);
+  await tick();
+  assert.deepEqual(commands[0], {action:'proportional_rate', gesture_id:'gesture-prop', roll_deg_s:5, pitch_deg_s:-5});
+  assert.equal(await sendCommandAfterStop(control, async c => { commands.push(c); return true; }, {action:'attitude', roll_deg:0, pitch_deg:15}), true);
+  assert.deepEqual(commands.slice(-2), [{action:'stop', gesture_id:'gesture-prop'}, {action:'attitude', roll_deg:0, pitch_deg:15}]);
 });

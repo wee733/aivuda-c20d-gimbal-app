@@ -6,7 +6,7 @@ uint8 POINT_MOVE=5
 uint8 TRACK_TARGET=6
 uint8 command
 ---
-# Accepted into the transmit queue, NOT confirmation of device execution.
+# MANUAL waits for a device reply to the zero-rate hold. Other commands report queue acceptance.
 # Observe GimbalState.command_code and command_status for device result.
 bool accepted
 string message

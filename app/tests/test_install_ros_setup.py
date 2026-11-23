@@ -5,7 +5,10 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import sys
 import unittest
+
+import yaml
 
 PACKAGE = Path(__file__).resolve().parents[1]
 
@@ -62,6 +65,31 @@ chmod +x install/c20d_driver/lib/c20d_driver/c20d_node
 
     def install(self):
         return self.run_script(self.app / 'scripts' / 'pre_install.sh')
+
+    def test_optional_interface_configuration_and_upgrade(self):
+        config_path = self.app / 'config' / 'default_config.yaml'
+        config = yaml.safe_load(config_path.read_text())
+        output = self.root / 'params.yaml'
+        render = [sys.executable, str(self.app / 'scripts' / 'render_config.py'),
+                  str(config_path), str(output)]
+        self.assertFalse(config['control']['teleop_enabled'])
+        keys = ('publish_joint_states', 'enable_auxiliary_interfaces')
+        for key in keys:
+            self.assertIs(config['control'].pop(key), False)
+        for enabled in (False, True):
+            if enabled:
+                config['control'].update({key: True for key in keys})
+            config_path.write_text(yaml.safe_dump(config))
+            subprocess.run(render, check=True)
+            params = yaml.safe_load(output.read_text())['c20d_driver']['ros__parameters']
+            for key in keys:
+                self.assertIs(params[key], enabled)
+            self.assertEqual(params['port'], '/dev/ttyTHS1')
+        config['control']['publish_joint_states'] = 'false'
+        config_path.write_text(yaml.safe_dump(config))
+        result = subprocess.run(render, capture_output=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b'publish_joint_states must be boolean', result.stderr)
 
     def test_default_four_and_runtime_uses_build_environment(self):
         result = self.install()

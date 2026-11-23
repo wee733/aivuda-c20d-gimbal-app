@@ -6,7 +6,7 @@ The [C++ driver and messages](app/ros_ws/src/c20d_driver/) are built during inst
 
 ## Build the aivudaOS package
 
-App ID `app_gimbal_control_c20d_20260526_512d09` · Version `ros2-2.0.1`
+App ID `app_gimbal_control_c20d_20260526_512d09` · Version `ros2-3.0.0`
 
 From a Git checkout, run the following command with Bash, Git, GNU tar, gzip and Python 3 with PyYAML installed.
 

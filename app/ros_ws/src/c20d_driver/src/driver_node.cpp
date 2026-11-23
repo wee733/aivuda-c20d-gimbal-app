@@ -27,9 +27,7 @@
 #include <string>
 #include <utility>
 
-#include "c20d_driver/msg/angle_state.hpp"
 #include "c20d_driver/msg/angular_rate_command.hpp"
-#include "c20d_driver/msg/angular_rate_state.hpp"
 #include "c20d_driver/msg/attitude_command.hpp"
 #include "c20d_driver/msg/camera_data.hpp"
 #include "c20d_driver/msg/carrier_data.hpp"
@@ -63,7 +61,7 @@ public:
   {
     rcl_interfaces::msg::ParameterDescriptor fixed;
     fixed.read_only = true;
-    port_name_ = declare_parameter("port", "/dev/ttyTHS1", fixed);
+    port_name_ = declare_parameter("port", "/dev/ttyUSB0", fixed);
     frame_id_ = declare_parameter("frame_id", "c20d_head_up", fixed);
     const double rate = declare_parameter("update_rate", 100.0, fixed);
     feedback_timeout_ = declare_parameter("feedback_timeout", 0.5, fixed);
@@ -86,65 +84,45 @@ public:
       throw std::invalid_argument("Rate must be 50..150 Hz; limits cannot exceed horizontal C20D");
     }
     state_pub_ = create_publisher<msg::GimbalState>("~/state", rclcpp::SensorDataQoS());
-    relative_pub_ = create_publisher<msg::AngleState>(
-      "~/state/relative_angle", rclcpp::SensorDataQoS());
-    attitude_pub_ = create_publisher<msg::AngleState>(
-      "~/state/attitude", rclcpp::SensorDataQoS());
-    rate_pub_ = create_publisher<msg::AngularRateState>(
-      "~/state/angular_rate", rclcpp::SensorDataQoS());
-    joints_pub_ = create_publisher<sensor_msgs::msg::JointState>(
-      "~/joint_states", rclcpp::SensorDataQoS());
+    if (declare_parameter("publish_joint_states", false, fixed)) {
+      joints_pub_ = create_publisher<sensor_msgs::msg::JointState>(
+        "~/joint_states", rclcpp::SensorDataQoS());
+    }
     diagnostics_pub_ = create_publisher<diagnostic_msgs::msg::DiagnosticArray>("~/diagnostics", 10);
-    // Advertise schemas even before the first command; retain only accepted inputs.
-    const auto echo_qos = rclcpp::QoS(1).reliable().transient_local();
-    relative_echo_pub_ = create_publisher<msg::RelativeAngleCommand>(
-      "~/command_echo/relative_angle", echo_qos);
-    attitude_echo_pub_ = create_publisher<msg::AttitudeCommand>(
-      "~/command_echo/attitude", echo_qos);
-    rate_echo_pub_ = create_publisher<msg::AngularRateCommand>(
-      "~/command_echo/angular_rate", echo_qos);
-    proportional_echo_pub_ = create_publisher<msg::ProportionalRateCommand>(
-      "~/command_echo/proportional_rate", echo_qos);
     auto command_qos = rclcpp::QoS(1).reliable().durability_volatile();
     command_qos.lifespan(rclcpp::Duration::from_seconds(command_timeout_));
     relative_sub_ = create_subscription<msg::RelativeAngleCommand>(
       "~/command/relative_angle", command_qos,
       [this](const msg::RelativeAngleCommand & m) {
-        if (manual(m.header, m.roll_deg, m.pitch_deg, 2, 0,
-          m.fpv_sensitivity, m.center_roll, m.center_pitch))
-        {
-          relative_echo_pub_->publish(m);
-        }
+        manual(
+          m.header, m.roll_deg, m.pitch_deg, 2, 0,
+          m.fpv_sensitivity, m.center_roll, m.center_pitch);
       });
     attitude_sub_ = create_subscription<msg::AttitudeCommand>(
       "~/command/attitude", command_qos,
       [this](const msg::AttitudeCommand & m) {
-        if (manual(m.header, m.roll_deg, m.pitch_deg, 1, 0, 0, m.center_roll, m.center_pitch)) {
-          attitude_echo_pub_->publish(m);
-        }
+        manual(m.header, m.roll_deg, m.pitch_deg, 1, 0, 0, m.center_roll, m.center_pitch);
       });
     rate_sub_ = create_subscription<msg::AngularRateCommand>(
       "~/command/angular_rate", command_qos,
       [this](const msg::AngularRateCommand & m) {
-        if (manual(m.header, m.roll_deg_s, m.pitch_deg_s, 1, 2)) {
-          rate_echo_pub_->publish(m);
-        }
+        manual(m.header, m.roll_deg_s, m.pitch_deg_s, 1, 2);
       });
-    proportional_sub_ = create_subscription<msg::ProportionalRateCommand>(
-      "~/command/proportional_rate", command_qos,
-      [this](const msg::ProportionalRateCommand & m) {
-        if (manual(m.header, m.roll_deg_s, m.pitch_deg_s, 1, 1)) {
-          proportional_echo_pub_->publish(m);
-        }
-      });
-    carrier_sub_ = create_subscription<msg::CarrierData>(
-      "~/carrier", rclcpp::QoS(1), [this](const msg::CarrierData & m) {carrier(m);});
-    camera_sub_ = create_subscription<msg::CameraData>(
-      "~/camera", rclcpp::QoS(1), [this](const msg::CameraData & m) {camera(m);});
+    if (declare_parameter("enable_auxiliary_interfaces", false, fixed)) {
+      proportional_sub_ = create_subscription<msg::ProportionalRateCommand>(
+        "~/command/proportional_rate", command_qos,
+        [this](const msg::ProportionalRateCommand & m) {
+          manual(m.header, m.roll_deg_s, m.pitch_deg_s, 1, 1);
+        });
+      carrier_sub_ = create_subscription<msg::CarrierData>(
+        "~/carrier", rclcpp::QoS(1), [this](const msg::CarrierData & m) {carrier(m);});
+      camera_sub_ = create_subscription<msg::CameraData>(
+        "~/camera", rclcpp::QoS(1), [this](const msg::CameraData & m) {camera(m);});
+    }
     service_ = create_service<srv::DeviceCommand>(
       "~/device_command",
-      [this](const std::shared_ptr<srv::DeviceCommand::Request> request,
-      std::shared_ptr<srv::DeviceCommand::Response> response)
+      [this](std::shared_ptr<rmw_request_id_t> id,
+      std::shared_ptr<srv::DeviceCommand::Request> request)
       {
         try {
           require_link();
@@ -158,16 +136,17 @@ public:
           if ((code == 5 || code == 6) && age(camera_time_) > auxiliary_timeout_) {
             throw std::runtime_error("Point/track requires fresh camera data");
           }
-          if (code == 4) {
-            hold();
-          }
           queue_command(code);
           active_mode_ = code;
-          response->accepted = true;
-          response->message = "Queued; execution result is reported on state";
+          if (code == 4) {
+            hold();
+            rate_cutoff_ns_ = now().nanoseconds();
+            hold_request_ = id;
+            return;  // Wait for the UART acknowledgement before allowing the next target.
+          }
+          respond(*id, true, "Queued. Execution result is reported on state");
         } catch (const std::exception & e) {
-          response->accepted = false;
-          response->message = e.what();
+          respond(*id, false, e.what());
         }
       });
     timer_ = create_wall_timer(
@@ -218,8 +197,8 @@ private:
     if (header.stamp.sec == 0 && header.stamp.nanosec == 0) {
       return;
     }
-    const double delta = (now() - rclcpp::Time(header.stamp,
-        get_clock()->get_clock_type())).seconds();
+    const rclcpp::Time stamp(header.stamp, get_clock()->get_clock_type());
+    const double delta = (now() - stamp).seconds();
     if (delta > timeout || delta < -0.1) {
       throw std::invalid_argument("Message timestamp is stale or in the future");
     }
@@ -243,13 +222,32 @@ private:
     rate_active_ = false;
   }
 
-  bool manual(
+  void respond(rmw_request_id_t & id, bool accepted, const std::string & message)
+  {
+    srv::DeviceCommand::Response response;
+    response.accepted = accepted;
+    response.message = message;
+    service_->send_response(id, response);
+  }
+
+  void finish_hold(bool accepted, const std::string & message)
+  {
+    if (auto id = std::move(hold_request_)) {
+      respond(*id, accepted, message);
+    }
+  }
+
+  void manual(
     const std_msgs::msg::Header & header, double roll, double pitch, uint8_t mode, uint8_t type,
     int8_t sensitivity = 0, bool center_roll = false, bool center_pitch = false)
   {
     try {
       require_link();
       check_stamp(header, command_timeout_);
+      const auto stamp_ns = rclcpp::Time(header.stamp).nanoseconds();
+      if (type != 0 && stamp_ns != 0 && stamp_ns <= rate_cutoff_ns_) {
+        throw std::invalid_argument("Rate command predates the manual hold");
+      }
       if (last_feedback_.state == 1 || last_feedback_.state == 2 || last_feedback_.state == 3) {
         throw std::runtime_error("Device initializing, stopped or protected");
       }
@@ -296,11 +294,9 @@ private:
         queue_command(4);
         active_mode_ = 4;
       }
-      return true;
     } catch (const std::exception & e) {
       ++rejected_commands_;
       RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000, "Rejected command: %s", e.what());
-      return false;
     }
   }
 
@@ -382,24 +378,9 @@ private:
     m.relative_angle_rpy[1] = -m.relative_angle_rpy[1];
     m.camera_rate_rpy[1] = -m.camera_rate_rpy[1];
     state_pub_->publish(m);
-    msg::AngleState relative;
-    relative.header = m.header;
-    relative.roll_deg = m.relative_angle_rpy[0];
-    relative.pitch_deg = m.relative_angle_rpy[1];
-    relative.yaw_deg = m.relative_angle_rpy[2];
-    relative_pub_->publish(relative);
-    msg::AngleState attitude;
-    attitude.header = m.header;
-    attitude.roll_deg = m.camera_attitude_rpy[0];
-    attitude.pitch_deg = m.camera_attitude_rpy[1];
-    attitude.yaw_deg = m.camera_attitude_rpy[2];
-    attitude_pub_->publish(attitude);
-    msg::AngularRateState rate;
-    rate.header = m.header;
-    rate.roll_deg_s = m.camera_rate_rpy[0];
-    rate.pitch_deg_s = m.camera_rate_rpy[1];
-    rate.yaw_deg_s = m.camera_rate_rpy[2];
-    rate_pub_->publish(rate);
+    if (!joints_pub_) {
+      return;
+    }
     sensor_msgs::msg::JointState joints;
     joints.header = m.header;
     joints.name = {"c20d_roll_joint", "c20d_pitch_joint"};
@@ -420,7 +401,8 @@ private:
       }
       for (const auto & f : parser_.feed(buffer.data(), count)) {
         if (!received_) {
-          RCLCPP_INFO(get_logger(), "Feedback acquired: firmware_raw=%u, hw_error=%u",
+          RCLCPP_INFO(
+            get_logger(), "Feedback acquired: firmware_raw=%u, hw_error=%u",
             f.firmware, f.hardware_error);
         }
         received_ = true;
@@ -435,6 +417,9 @@ private:
           }
           control_.command = 0;  // Official requirement: clear on receipt of reply.
           pending_sent_ = false;
+          finish_hold(
+            f.command_status != 2, f.command_status == 2 ?
+            "Device rejected the manual hold" : "Manual hold acknowledged");
         }
         publish(f);
       }
@@ -507,6 +492,7 @@ private:
       RCLCPP_ERROR(get_logger(), "%s", e.what());
       serial_.close();
       received_ = false;
+      finish_hold(false, e.what());
     }
   }
 
@@ -557,6 +543,8 @@ private:
   bool received_ = false;
   bool pending_sent_ = false;
   bool rate_active_ = false;
+  int64_t rate_cutoff_ns_ = 0;
+  std::shared_ptr<rmw_request_id_t> hold_request_;
   uint8_t active_mode_ = 0;
   uint64_t frames_ = 0;
   uint64_t rejected_commands_ = 0;
@@ -565,12 +553,6 @@ private:
   rclcpp::Publisher<msg::GimbalState>::SharedPtr state_pub_;
   rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr joints_pub_;
   rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr diagnostics_pub_;
-  rclcpp::Publisher<msg::AngleState>::SharedPtr relative_pub_, attitude_pub_;
-  rclcpp::Publisher<msg::AngularRateState>::SharedPtr rate_pub_;
-  rclcpp::Publisher<msg::RelativeAngleCommand>::SharedPtr relative_echo_pub_;
-  rclcpp::Publisher<msg::AttitudeCommand>::SharedPtr attitude_echo_pub_;
-  rclcpp::Publisher<msg::AngularRateCommand>::SharedPtr rate_echo_pub_;
-  rclcpp::Publisher<msg::ProportionalRateCommand>::SharedPtr proportional_echo_pub_;
   rclcpp::Subscription<msg::RelativeAngleCommand>::SharedPtr relative_sub_;
   rclcpp::Subscription<msg::AttitudeCommand>::SharedPtr attitude_sub_;
   rclcpp::Subscription<msg::AngularRateCommand>::SharedPtr rate_sub_;

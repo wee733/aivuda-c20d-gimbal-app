@@ -1,6 +1,6 @@
 c20d_driver:
   ros__parameters:
-    port: /dev/ttyTHS1
+    port: /dev/ttyUSB0
     frame_id: c20d_head_up
     update_rate: 100.0
     feedback_timeout: 0.5
@@ -11,3 +11,5 @@ c20d_driver:
     roll_limit: 60.0
     pitch_limit: 120.0
     control_enabled: true
+    publish_joint_states: false
+    enable_auxiliary_interfaces: false

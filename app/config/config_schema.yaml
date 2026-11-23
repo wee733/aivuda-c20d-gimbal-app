@@ -10,7 +10,22 @@ properties:
       port:
         type: string
         minLength: 1
-        description: C20D serial port at 115200 8N1. Restart after changing.
+        default: /dev/ttyTHS1
+        description: C20D TTL serial port at 115200 8N1 (e.g. /dev/ttyTHS1 or /dev/serial/by-id/...). Restart after changing.
+        need_restart: true
+      update_rate:
+        type: number
+        minimum: 50
+        maximum: 150
+        default: 100.0
+        description: Serial control loop frequency in Hz (50–150 Hz; manufacturer requires >= 50 Hz).
+        need_restart: true
+      feedback_timeout:
+        type: number
+        minimum: 0.1
+        maximum: 10.0
+        default: 0.5
+        description: Reconnect serial link if valid gimbal feedback is absent for this many seconds.
         need_restart: true
   control:
     type: object
@@ -19,32 +34,49 @@ properties:
     properties:
       enabled:
         type: boolean
+        default: true
         description: Accept movement and device commands. Feedback remains active when disabled.
         need_restart: true
       teleop_enabled:
         type: boolean
-        description: Enable the Twist control relay used by the panel and Foxglove.
+        default: false
+        description: Start the optional Foxglove Twist relay (/gimbal_teleop/cmd). Not needed for the built-in WebUI.
+        need_restart: true
+      publish_joint_states:
+        type: boolean
+        default: false
+        description: Publish normalized roll and pitch relative angles on ~/joint_states in radians.
+        need_restart: true
+      enable_auxiliary_interfaces:
+        type: boolean
+        default: false
+        description: Enable proportional rate, carrier INS fusion (~/carrier), and camera FOV/zoom/target (~/camera) topics.
         need_restart: true
       command_timeout:
         type: number
-        exclusiveMinimum: 0
-        description: Stop motion after this command timeout in seconds.
+        minimum: 0.05
+        maximum: 10.0
+        default: 0.5
+        description: Stop velocity motion after this timeout in seconds when commands stop arriving.
         need_restart: true
       max_rate:
         type: number
-        exclusiveMinimum: 0
+        minimum: 0.1
         maximum: 80
-        description: Maximum axis speed in degrees per second, up to 80.
+        default: 80.0
+        description: Maximum single-axis angular rate in degrees per second (0.1–80 °/s).
         need_restart: true
       roll_limit:
         type: number
-        exclusiveMinimum: 0
+        minimum: 1
         maximum: 60
-        description: Roll angle limit in degrees.
+        default: 60.0
+        description: Maximum roll target angle magnitude in degrees (1–60°).
         need_restart: true
       pitch_limit:
         type: number
-        exclusiveMinimum: 0
+        minimum: 1
         maximum: 120
-        description: Pitch angle limit in degrees.
+        default: 120.0
+        description: Maximum pitch target angle magnitude in degrees (1–120°; >= 90° required for Down View).
         need_restart: true

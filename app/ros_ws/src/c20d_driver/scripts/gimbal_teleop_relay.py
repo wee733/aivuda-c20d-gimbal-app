@@ -27,20 +27,16 @@ from c20d_driver.msg import AngularRateCommand
 from geometry_msgs.msg import Twist
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import DurabilityPolicy
-from rclpy.qos import QoSProfile
 
 
 class GimbalTeleopRelay(Node):
     """Forward one output per input, without refreshing commands during a disconnect."""
 
     def __init__(self):
-        """Create the command output, input subscription and schema/observation echo."""
+        """Create the command output and input subscription."""
         super().__init__('gimbal_teleop_relay')
         self.publisher = self.create_publisher(
             AngularRateCommand, '/c20d_driver/command/angular_rate', 1)
-        echo_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
-        self.echo = self.create_publisher(Twist, '/gimbal_teleop/input_echo', echo_qos)
         self.subscription = self.create_subscription(
             Twist, '/gimbal_teleop/cmd', self.on_twist, 1)
 
@@ -50,7 +46,6 @@ class GimbalTeleopRelay(Node):
                 message.angular.x, message.angular.y, message.linear.z)):
             self.get_logger().warning('Rejected non-finite gimbal teleop input')
             return
-        self.echo.publish(message)
         stamp = self.get_clock().now().to_msg()
         # The real pad sends linear.z=1 on BOTH direction release and middle press.
         # Those identical packets cannot identify a center request. Ignore linear
